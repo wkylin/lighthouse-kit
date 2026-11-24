@@ -1,0 +1,189 @@
+// 逐页扫描：每次（页面 × 次数）一个全新的 Chrome，写 lighthouse.json / .html 与 summary.json。
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import lighthouse from 'lighthouse'
+import puppeteer from 'puppeteer-core'
+import { findChrome } from './chrome.mjs'
+import { loadTimedOut } from './docs/format.mjs'
+import { writeLighthouseHtml } from './report/lighthouse-html.mjs'
+import { pageSlug, writeRoundMeta } from './round.mjs'
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+function median(values) {
+  const v = values.filter((x) => typeof x === 'number' && Number.isFinite(x)).sort((a, b) => a - b)
+  if (!v.length) return null
+  const m = Math.floor(v.length / 2)
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2
+}
+
+const pct = (cat) => (cat?.score == null ? null : Math.round(cat.score * 100))
+
+/** @returns {import('./types.mjs').Scores} */
+export function scoresOf(lhr) {
+  const c = lhr.categories ?? {}
+  const refs = (c['agentic-browsing']?.auditRefs ?? []).filter((r) => r.weight > 0)
+  return {
+    perf: pct(c.performance),
+    a11y: pct(c.accessibility),
+    bp: pct(c['best-practices']),
+    seo: pct(c.seo),
+    agentic: refs.length ? { pass: refs.filter((r) => lhr.audits?.[r.id]?.score === 1).length, total: refs.length } : null,
+  }
+}
+
+/** @returns {import('./types.mjs').Metrics} */
+export function metricsOf(lhr) {
+  const v = (id) => lhr.audits?.[id]?.numericValue ?? null
+  return { fcp: v('first-contentful-paint'), lcp: v('largest-contentful-paint'), tbt: v('total-blocking-time'), cls: v('cumulative-layout-shift'), si: v('speed-index') }
+}
+
+/** 性能分最接近中位数的那次（相同取序号小的）。 */
+function representativeOf(okRuns) {
+  const med = median(okRuns.map((r) => r.scores.perf))
+  if (med == null) return okRuns[0]?.index ?? null
+  let best = okRuns[0]
+  for (const r of okRuns) if (Math.abs(r.scores.perf - med) < Math.abs(best.scores.perf - med)) best = r
+  return best.index
+}
+
+async function runOnce({ config, url, dir, signal, maxWaitForLoad, chromePath }) {
+  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lhkit-profile-'))
+  let browser
+  const onAbort = () => void browser?.close().catch(() => {})
+  signal?.addEventListener('abort', onAbort, { once: true })
+  try {
+    browser = await puppeteer.launch({
+      executablePath: chromePath ?? findChrome(config),
+      headless: true,
+      userDataDir,
+      args: ['--ignore-certificate-errors', '--no-first-run', '--no-default-browser-check'],
+      // Ctrl+C / kill 由 lhkit 自己处理（中止扫描、关服务、标记轮次）；puppeteer 默认会自行退出或只关浏览器。
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
+    })
+    if (signal?.aborted) throw new Error('已中断')
+    const page = await browser.newPage()
+    if (config.visit === 'repeat') {
+      if (config.beforePage) await config.beforePage({ page, url, warmup: true })
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: maxWaitForLoad }).catch(() => {})
+      await sleep(2000)
+    }
+    if (config.beforePage) await config.beforePage({ page, url, warmup: false })
+    const result = await lighthouse(
+      url,
+      {
+        output: 'json',
+        logLevel: 'error',
+        formFactor: 'mobile',
+        throttlingMethod: 'simulate',
+        onlyCategories: config.categories,
+        maxWaitForLoad,
+        disableStorageReset: config.visit === 'repeat',
+      },
+      undefined,
+      page,
+    )
+    if (!result) throw new Error('Lighthouse 没有返回结果')
+    await fs.mkdir(dir, { recursive: true })
+    const jsonPath = path.join(dir, 'lighthouse.json')
+    await fs.writeFile(jsonPath, result.report)
+    writeLighthouseHtml(jsonPath, result.lhr)
+    return result.lhr
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+    await browser?.close().catch(() => {})
+    await fs.rm(userDataDir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+/**
+ * @param {{config: import('./types.mjs').Config, origin: string, roundDir: string, meta: import('./types.mjs').RoundMeta, pages: string[],
+ *   log: {info: (m: string) => void}, signal?: AbortSignal, maxWaitForLoad?: number, chromePath?: string}} opts
+ * @returns {Promise<{meta: import('./types.mjs').RoundMeta, pages: import('./types.mjs').PageSummary[]}>}
+ */
+export async function scanRound({ config, origin, roundDir, meta, pages, log, signal, maxWaitForLoad = 45000, chromePath }) {
+  /** @type {import('./types.mjs').PageSummary[]} */
+  const summaries = []
+  let lighthouseVersion = ''
+  let aborted = false
+  for (const page of pages) {
+    if (signal?.aborted) {
+      aborted = true
+      break
+    }
+    const slug = pageSlug(page)
+    const url = `${origin}${page}`
+    const started = Date.now()
+    const runs = []
+    let finalUrl = null
+    for (let index = 1; index <= config.runs; index++) {
+      if (signal?.aborted) break
+      try {
+        const lhr = await runOnce({ config, url, dir: path.join(roundDir, 'pages', slug, `run-${index}`), signal, maxWaitForLoad, chromePath })
+        lighthouseVersion ||= lhr.lighthouseVersion
+        if (lhr.runtimeError) {
+          runs.push({ index, ok: false, error: `${lhr.runtimeError.code}：${lhr.runtimeError.message}`, scores: null, metrics: null, warnings: [] })
+        } else {
+          finalUrl = lhr.finalDisplayedUrl ?? lhr.finalUrl ?? url
+          // runWarnings：例如加载超时（照常出分，但结果可能不完整）
+          runs.push({ index, ok: true, error: null, scores: scoresOf(lhr), metrics: metricsOf(lhr), warnings: [...(lhr.runWarnings ?? [])] })
+        }
+      } catch (error) {
+        runs.push({ index, ok: false, error: signal?.aborted ? '已中断' : String(error?.message ?? error), scores: null, metrics: null, warnings: [] })
+      }
+    }
+    if (signal?.aborted) {
+      aborted = true
+      break
+    }
+    const okRuns = runs.filter((r) => r.ok)
+    const representative = representativeOf(okRuns)
+    const rep = okRuns.find((r) => r.index === representative)
+    const med = (pick) => median(okRuns.map(pick))
+    /** @type {import('./types.mjs').PageSummary} */
+    const summary = {
+      page,
+      slug,
+      ok: okRuns.length > 0,
+      error: okRuns.length ? null : (runs.at(-1)?.error ?? '扫描失败'),
+      finalUrl,
+      warnings: [...new Set(okRuns.flatMap((r) => r.warnings))],
+      runs,
+      representative,
+      median: okRuns.length
+        ? {
+            scores: { perf: med((r) => r.scores.perf), a11y: med((r) => r.scores.a11y), bp: med((r) => r.scores.bp), seo: med((r) => r.scores.seo), agentic: rep.scores.agentic },
+            metrics: { fcp: med((r) => r.metrics.fcp), lcp: med((r) => r.metrics.lcp), tbt: med((r) => r.metrics.tbt), cls: med((r) => r.metrics.cls), si: med((r) => r.metrics.si) },
+          }
+        : null,
+    }
+    await fs.mkdir(path.join(roundDir, 'pages', slug), { recursive: true })
+    await fs.writeFile(path.join(roundDir, 'pages', slug, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)
+    summaries.push(summary)
+    const secs = Math.round((Date.now() - started) / 1000)
+    if (summary.ok) {
+      const m = summary.median
+      const slow = loadTimedOut(summary) ? '  ⚠ 加载超时，结果可能不完整' : ''
+      log.info(`${page}  性能 ${m.scores.perf ?? '–'}  LCP ${m.metrics.lcp == null ? '–' : (m.metrics.lcp / 1000).toFixed(1) + ' s'}  TBT ${m.metrics.tbt == null ? '–' : Math.round(m.metrics.tbt) + ' ms'}  ${secs}s${slow}`)
+    } else {
+      log.info(`${page}  失败：${summary.error}  ${secs}s`)
+    }
+  }
+  const failedPages = summaries.filter((s) => !s.ok).map((s) => s.page)
+  const next = {
+    ...meta,
+    origin,
+    lighthouseVersion: lighthouseVersion || meta.lighthouseVersion,
+    visit: config.visit,
+    formFactor: config.formFactor,
+    runs: config.runs,
+    failedPages,
+    status: aborted ? 'aborted' : failedPages.length ? 'failed-pages' : 'complete',
+    finishedAt: new Date().toISOString(),
+  }
+  await writeRoundMeta(roundDir, next)
+  return { meta: next, pages: summaries }
+}

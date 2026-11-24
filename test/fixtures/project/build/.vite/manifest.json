@@ -1,0 +1,33 @@
+{
+  "src/mobile/home/MobileHome.vue": {
+    "file": "js/MobileHome-Bg_GMbry.js",
+    "name": "MobileHome",
+    "src": "src/mobile/home/MobileHome.vue",
+    "isDynamicEntry": true
+  },
+  "src/mobile/instant/MIHost.vue": {
+    "file": "js/MIHost-Dr2bGijs.js",
+    "name": "MIHost",
+    "src": "src/mobile/instant/MIHost.vue",
+    "isDynamicEntry": true
+  },
+  "_MBoard-q88wBfdR.js": {
+    "file": "js/MBoard-q88wBfdR.js",
+    "name": "MBoard"
+  },
+  "_vue-runtime-CXWO_RqQ.js": {
+    "file": "js/vue-runtime-CXWO_RqQ.js",
+    "name": "vue-runtime",
+    "isDynamicEntry": true
+  },
+  "../../node_modules/.pnpm/@fontsource-variable+hanken-grotesk@5.2.8/node_modules/@fontsource-variable/hanken-grotesk/files/hanken-grotesk-latin-ext-wght-normal.woff2": {
+    "file": "static/hanken-grotesk-latin-ext-wght-normal-Dg-wlmqe.woff2",
+    "src": "../../node_modules/.pnpm/@fontsource-variable+hanken-grotesk@5.2.8/node_modules/@fontsource-variable/hanken-grotesk/files/hanken-grotesk-latin-ext-wght-normal.woff2"
+  },
+  "index.html": {
+    "file": "js/index-AAAA1111.js",
+    "name": "index",
+    "src": "index.html",
+    "isEntry": true
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "name": "lighthouse-kit",
+  "version": "0.1.0",
+  "description": "与框架无关的本地 Lighthouse 工具：构建、起服务、逐页扫描、规则分析（可选 AI），生成开发版与负责人版文档和总览页",
+  "keywords": [
+    "lighthouse",
+    "performance",
+    "core-web-vitals",
+    "web-vitals",
+    "cli",
+    "vite",
+    "vue",
+    "react",
+    "source-map"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wkylin/lighthouse-kit.git"
+  },
+  "homepage": "https://github.com/wkylin/lighthouse-kit#readme",
+  "bugs": {
+    "url": "https://github.com/wkylin/lighthouse-kit/issues"
+  },
+  "type": "module",
+  "bin": {
+    "lhkit": "bin/lhkit.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./types/index.d.ts",
+  "files": [
+    "bin",
+    "src",
+    "types"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:e2e": "node --test --test-concurrency=1 test/e2e/*.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "dependencies": {
+    "lighthouse": "13.5.0",
+    "markdown-it": "^15.0.3",
+    "puppeteer-core": "^25.18.1",
+    "selfsigned": "^5.5.0"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^1.13.0"
+  }
+}
