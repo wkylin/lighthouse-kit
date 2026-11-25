@@ -23,16 +23,17 @@ import { startTarget } from './serve/index.mjs'
 
 /** 每个命令接受的参数；给了用不上的参数直接报错，而不是悄悄忽略。 */
 const ALLOWED = {
-  init: ['force'],
-  build: [],
-  run: ['runs', 'name', 'url', 'ai-dry-run'],
-  scan: ['runs', 'name', 'url', 'ai-dry-run'],
-  analyze: ['ai-dry-run'],
-  preview: [],
-  compare: [],
+  init: ['force', 'config'],
+  build: ['config'],
+  run: ['runs', 'name', 'url', 'ai-dry-run', 'config'],
+  scan: ['runs', 'name', 'url', 'ai-dry-run', 'config'],
+  analyze: ['ai-dry-run', 'config'],
+  preview: ['config'],
+  compare: ['config'],
 }
 
 const OPTIONS = {
+  config: { type: 'string' },
   runs: { type: 'string' },
   name: { type: 'string' },
   url: { type: 'string' },
@@ -121,8 +122,8 @@ async function writeOutputs(roundDir, config, meta, log, { dryRun }) {
 }
 
 async function runOrScan(command, values, positionals, ctx) {
-  const { cwd } = ctx
-  const config = await loadConfig(cwd, { url: values.url, runs: parseRuns(values.runs) })
+  const { configDir } = ctx
+  const config = await loadConfig(configDir, { url: values.url, runs: parseRuns(values.runs) })
   const requested = parsePages(positionals)
   const pages = requested.length ? requested : config.pages
   // 先找 Chrome：找不到就是一条配置错误，不用等构建和起服务。
@@ -197,10 +198,14 @@ export async function runCli(argv, { cwd = process.cwd(), env = process.env, log
     const extra = Object.keys(values).filter((k) => !ALLOWED[command].includes(k))
     if (extra.length) throw new ConfigError(`配置错误：${command} 不支持参数 ${extra.map((k) => `--${k}`).join('、')}`)
   }
+
+  // 确定配置目录：优先用 --config，否则用 cwd
+  const configDir = values.config ? path.resolve(cwd, values.config) : cwd
+
   const ctx = { cwd, env, log }
   switch (command) {
     case 'init': {
-      const root = path.resolve(cwd)
+      const root = path.resolve(configDir)
       const file = writeConfigTemplate(root, { force: values.force === true })
       log.info(`已生成 ${file}，按项目情况修改后运行 npx lhkit run`)
       const hint = installHint(root)
@@ -208,7 +213,7 @@ export async function runCli(argv, { cwd = process.cwd(), env = process.env, log
       return 0
     }
     case 'build': {
-      const config = await loadConfig(cwd)
+      const config = await loadConfig(configDir)
       if (!config.build) {
         log.info('配置里没有 build 命令（或 serve 为网址模式），无需构建')
         return 0
@@ -233,9 +238,9 @@ export async function runCli(argv, { cwd = process.cwd(), env = process.env, log
     }
     case 'run':
     case 'scan':
-      return runOrScan(command, values, positionals, ctx)
+      return runOrScan(command, values, positionals, { ...ctx, configDir })
     case 'analyze': {
-      const config = await loadConfig(cwd)
+      const config = await loadConfig(configDir)
       const dir = await resolveRound(config.outDir, positionals[0])
       const meta = await readRoundMeta(dir)
       const out = await writeOutputs(dir, config, meta, log, { dryRun: values['ai-dry-run'] === true })
@@ -244,7 +249,7 @@ export async function runCli(argv, { cwd = process.cwd(), env = process.env, log
       return 0
     }
     case 'preview': {
-      const config = await loadConfig(cwd)
+      const config = await loadConfig(configDir)
       const index = path.join(await resolveRound(config.outDir, positionals[0]), 'index.html')
       if (!fs.existsSync(index)) throw new ConfigError(`配置错误：${index} 不存在，请先运行 lhkit analyze`)
       log.info(`总览：${index}`)
@@ -253,7 +258,7 @@ export async function runCli(argv, { cwd = process.cwd(), env = process.env, log
     }
     case 'compare': {
       if (positionals.length !== 2) throw new ConfigError('配置错误：用法 lhkit compare <A> <B>')
-      const config = await loadConfig(cwd)
+      const config = await loadConfig(configDir)
       const result = await compareRounds(config.outDir, positionals[0], positionals[1])
       log.info(`对比：${result.mdPath}`)
       openInBrowser(result.htmlPath, env)

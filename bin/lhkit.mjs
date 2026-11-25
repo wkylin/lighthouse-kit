@@ -23,6 +23,7 @@ export const HELP = `lhkit ${pkg.version} — 本地 Lighthouse 扫描、报告�
   compare <A> <B>                        对比两个轮次
 
 通用参数：
+  --config <dir>                         指定配置目录（默认当前目录）
   -h, --help                             显示帮助
   -v, --version                          显示版本
 
