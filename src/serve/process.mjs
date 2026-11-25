@@ -1,7 +1,9 @@
 // 子进程组：起服务、等就绪、整组停止。
+import { execSync } from 'node:child_process'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
+import os from 'node:os'
 import { NotReadyError } from '../errors.mjs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -20,6 +22,58 @@ export async function isPortInUse(port) {
       socket.once('error', () => done(false))
     })
   return (await tryHost('127.0.0.1')) || (await tryHost('::1'))
+}
+
+/**
+ * 杀掉占用指定端口的进程（macOS/Linux）。
+ * @param {number} port
+ * @returns {Promise<boolean>} 返回是否成功杀掉了进程
+ */
+export async function killPortProcess(port) {
+  try {
+    const isUnix = process.platform !== 'win32'
+    if (!isUnix) return false // Windows 下不支持自动 kill
+
+    // macOS 和 Linux 都支持 lsof
+    let pid = null
+    try {
+      const output = execSync(`lsof -i :${port} -t`, { encoding: 'utf8', stdio: 'pipe' }).trim()
+      pid = parseInt(output.split('\n')[0], 10)
+    } catch {
+      // lsof 不可用，尝试 netstat (Linux)
+      try {
+        const output = execSync(`netstat -tlnp 2>/dev/null | grep :${port}`, { encoding: 'utf8', shell: true })
+        const match = output.match(/\/(\d+)/)
+        if (match) pid = parseInt(match[1], 10)
+      } catch {
+        return false
+      }
+    }
+
+    if (!pid || isNaN(pid) || pid === process.pid) {
+      // 不 kill 主进程（当前进程），只 kill 子进程
+      return false
+    }
+
+    try {
+      process.kill(pid, 'SIGTERM')
+      await sleep(500)
+      // 检查进程是否仍在运行
+      try {
+        process.kill(pid, 0)
+        // 仍在运行，尝试 SIGKILL
+        process.kill(pid, 'SIGKILL')
+        await sleep(500)
+      } catch {
+        // 进程已死亡
+      }
+      return true
+    } catch {
+      return false
+    }
+  } catch {
+    return false
+  }
 }
 
 /**

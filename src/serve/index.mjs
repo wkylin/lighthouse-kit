@@ -5,7 +5,7 @@ import { ConfigError } from '../config.mjs'
 import { NotReadyError, PortInUseError } from '../errors.mjs'
 import { DEFAULT_CERT_DIR, ensureCert } from './cert.mjs'
 import { startH2Proxy } from './h2proxy.mjs'
-import { isPortInUse, spawnGroup, stopGroup, waitReady } from './process.mjs'
+import { isPortInUse, killPortProcess, spawnGroup, stopGroup, waitReady } from './process.mjs'
 import { startStaticServer } from './static.mjs'
 
 export { NotReadyError, PortInUseError }
@@ -34,8 +34,35 @@ export async function startTarget(config, { log, logDir, certDir = DEFAULT_CERT_
     // 起任何东西之前先检查：构建目录在不在、两个端口是否空闲。
     if (serve.mode === 'static' && !fs.existsSync(serve.static))
       throw new ConfigError(`配置错误：构建目录 ${serve.static} 不存在，先运行 lhkit build（或 lhkit run）`)
-    if (await isPortInUse(serve.port)) throw new PortInUseError(serve.port)
-    if (config.https.enabled && (await isPortInUse(config.https.port))) throw new PortInUseError(config.https.port)
+
+    // 检查端口占用，如果被占用则尝试自动 kill
+    if (await isPortInUse(serve.port)) {
+      log.info(`端口 ${serve.port} 被占用，尝试 kill 占用进程...`)
+      const killed = await killPortProcess(serve.port)
+      if (killed) {
+        log.info(`✓ 已杀掉占用端口 ${serve.port} 的进程`)
+        await new Promise((r) => setTimeout(r, 1000)) // 等待端口释放
+      } else {
+        // 仍然被占用，抛出错误
+        if (await isPortInUse(serve.port)) {
+          throw new PortInUseError(serve.port)
+        }
+      }
+    }
+
+    if (config.https.enabled && (await isPortInUse(config.https.port))) {
+      log.info(`HTTPS 端口 ${config.https.port} 被占用，尝试 kill 占用进程...`)
+      const killed = await killPortProcess(config.https.port)
+      if (killed) {
+        log.info(`✓ 已杀掉占用端口 ${config.https.port} 的进程`)
+        await new Promise((r) => setTimeout(r, 1000))
+      } else {
+        if (await isPortInUse(config.https.port)) {
+          throw new PortInUseError(config.https.port)
+        }
+      }
+    }
+
     if (serve.mode === 'static') {
       const server = await startStaticServer({ dir: serve.static, port: serve.port, proxy: serve.proxy })
       stoppers.push(() => server.close())
