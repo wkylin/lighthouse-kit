@@ -1,63 +1,94 @@
 # lighthouse-kit（lhkit）
 
-与框架无关的本地 Lighthouse 工具：按项目配置 **构建 → 起服务（或直接扫给定网址）→ 逐页扫描 → 规则分析（可选 AI）→ 生成开发版与负责人版文档 → 浏览器里看总览、每页报告和文档**。Vue、React 或任何能“构建 + 起服务”的前端项目都能用。
+**简体中文** | [English](README.en.md)
 
-设计见 [docs/design.md](docs/design.md)。
+| [安装](#安装) | [配置](#配置) | [Options](#options) | [规则](#规则) |
+| :---: | :---: | :---: | :---: |
 
-## 要求
+按项目配置完成 **构建 → 启动服务 → 逐页 Lighthouse 扫描 → 规则与可选 AI 分析 → 生成报告**。适用于 React、Vue，以及其他能构建或提供访问地址的前端项目。
 
-- Node ≥ 22.19（Lighthouse 13 的要求）
-- macOS 或 Linux，本机装有 Chrome / Chromium（或用 `CHROME_PATH` / 配置 `chromePath` 指定）
+- 扫描性能、无障碍、最佳实践、SEO 和 Agentic Browsing，生成 HTML 总览、原始 Lighthouse 报告，以及开发版、负责人版 Markdown / HTML 文档。
+- 通过 manifest 和 source map 将资源关联到源码，合并多页面问题并排序，方便确定优化顺序。
+- 可直接接入 Claude、OpenAI、DeepSeek 或兼容 API，也可通过 skill 复用 Codex、Claude Code 等助手的当前会话。
+
+完整步骤与排错见 [中文操作手册](docs/user-guide.md)；配置类型见 [types/index.d.ts](types/index.d.ts)；实现设计见 [docs/design.md](docs/design.md)。
 
 ## 安装
 
-在要扫描的项目里安装为开发依赖（推荐，版本跟着项目走，配置文件也有类型提示）：
+需要 **Node.js ≥ 22.19、macOS 或 Linux，以及 Chrome / Chromium**。浏览器默认自动查找，也可用 `CHROME_PATH` 环境变量或 `chromePath` 配置指定。
+
+### CLI：完成第一次扫描
+
+在业务项目中安装，使用该项目原有的包管理器：
 
 ```bash
 npm install -D lighthouse-kit
-# 或
-pnpm add -D lighthouse-kit
-yarn add -D lighthouse-kit
+# pnpm 项目：pnpm add -D lighthouse-kit
+# Yarn 项目：yarn add -D lighthouse-kit
+
+npx lhkit init
+# 编辑生成的 lhkit.config.mjs，按下一节设置构建命令、服务和页面
+npx lhkit run
 ```
 
-然后：
+pnpm workspace **根目录**安装使用 `pnpm add -Dw lighthouse-kit`；子包安装可进入该子包或使用 `--filter`。后续命令可对应写为 `pnpm exec lhkit run` 或 `yarn lhkit run`。若已有 npm overrides 冲突，应先处理业务项目的依赖声明。
+
+不安装到项目也可用 `npx lighthouse-kit init`、`npx lighthouse-kit run`。项目脚本可添加 `"perf": "lhkit run"` 和 `"perf:scan": "lhkit scan"`。
+
+### Skill：使用当前助手分析
+
+CLI 与 skill 分别安装。先在目标项目安装 CLI，再按使用的助手选择复制位置：
 
 ```bash
-npx lhkit init     # 生成 lhkit.config.mjs，按项目改好
-npx lhkit run      # 构建 → 起服务 → 扫描 → 出文档 → 打开总览
+# Codex：项目级 skill
+mkdir -p .agents/skills
+cp -R node_modules/lighthouse-kit/skills/lighthouse-kit .agents/skills/
+
+# Claude Code：项目级 skill
+mkdir -p .claude/skills
+cp -R node_modules/lighthouse-kit/skills/lighthouse-kit .claude/skills/
 ```
 
-也可以写进项目的 `package.json`：`"scripts": { "perf": "lhkit run", "perf:scan": "lhkit scan" }`。
+安装后在**助手对话中**使用：
 
-不想装进项目时，直接 `npx lighthouse-kit init` / `npx lighthouse-kit run`。
+- Codex：`用 $lighthouse-kit 分析这个项目`。
+- Claude Code：`/lighthouse-kit`，并说明目标项目和页面。
+- 以 DeepSeek 等模型为后端、支持 Agent Skills 且能读写文件和执行命令的宿主：加载同一份 [SKILL.md](skills/lighthouse-kit/SKILL.md)。只有聊天界面时，使用下方手动导出 / 导入流程。
 
-### 本地开发版（link）
+个人级目录分别为 `~/.agents/skills/` 和 `~/.claude/skills/`。会话模式可保持 `ai.enabled: false`，无需给 CLI 另配 API Key。
 
-改 lighthouse-kit 本身、想在项目里马上试时，用本地链接代替 npm 上的版本：
+<details>
+<summary>本地开发链接与 npm 发布（维护者）</summary>
+
+在工具仓库运行 `npm link`，再到业务项目运行 `npm link lighthouse-kit`；pnpm 可在业务项目使用 `pnpm add -D link:/path/to/lighthouse-kit`。取消 npm 链接使用 `npm unlink lighthouse-kit`，工具仓库的全局链接使用 `npm unlink -g lighthouse-kit`；pnpm 使用 `pnpm remove lighthouse-kit`，再安装所需版本。
+
+发布前检查 npm 包内容：
 
 ```bash
-# npm：先在 lighthouse-kit 仓库里注册一次，再到项目里链接
-cd /path/to/lighthouse-kit && npm link
-cd /path/to/your-project && npm link lighthouse-kit
-
-# pnpm：直接把本地目录加成依赖
-pnpm add -D link:/path/to/lighthouse-kit
+npm pack --dry-run
+npm login
+npm version patch
+npm publish
+git push --follow-tags
 ```
 
-取消链接：npm 用 `npm unlink lighthouse-kit`（项目里）和 `npm unlink -g lighthouse-kit`；pnpm 用 `pnpm remove lighthouse-kit` 后重新 `pnpm add -D lighthouse-kit`。
+`npm publish` 会通过 `prepublishOnly` 执行单元测试。npm 包包含 CLI、源码、类型、skill、README 和许可证；安装 npm 包后仍需将 skill 放入助手的发现目录。
+
+</details>
 
 ## 配置
 
-默认在当前工作目录依次查找 `lhkit.config.mjs`、`lhkit.config.js`（`lhkit init` 可生成 `.mjs` 模板）。通常在项目根目录运行，配置示例：
+默认只在当前目录依次查找 `lhkit.config.mjs`、`lhkit.config.js`。先选择服务方式，再按需要添加源码映射与 AI。
+
+### 本地构建项目
+
+下面是 **Vite 项目**示例；`package.json` 中的 `build` 脚本应执行 `vite build`。其他构建工具请使用对应的构建和 source map 选项。
 
 ```js
 /** @type {import('lighthouse-kit').UserConfig} */
 export default {
-  build: { command: 'npm run build -- --sourcemap hidden' },
-  // 三选一：项目自己的服务命令；工具托管构建目录；或只写网址扫描外部服务
-  serve: { static: 'dist' },
-  // serve: { command: 'npm run preview', url: 'http://localhost:4173', readyPath: '/' },
-  // serve: { url: 'https://staging.example.com' },
+  build: { command: 'npm run build -- --sourcemap hidden --manifest' },
+  serve: { static: 'dist', port: 4173 },
   pages: ['/', '/about'],
   sourceMap: { manifest: 'dist/.vite/manifest.json', maps: 'dist' },
   docs: { audiences: ['dev', 'lead'] },
@@ -65,174 +96,224 @@ export default {
 }
 ```
 
-第一行的 `@type` 注释让 VS Code 等编辑器给出字段补全和类型检查，不需要额外 import（用 npx 运行也没问题）。lighthouse-kit 装在项目里时也可以写成：
+`@type` 提供编辑器类型提示，项目安装依赖后可解析类型；也可使用包导出的 `defineConfig({...})`。source map 和 manifest 应来自**本次扫描对应的构建**。
 
-```js
-import { defineConfig } from 'lighthouse-kit'
+| 服务方式 | `serve` 配置示例 | 使用场景 |
+| --- | --- | --- |
+| 工具托管静态目录 | `{ static: 'dist', port: 4173 }` | 已构建的 SPA 等静态项目 |
+| 启动项目自己的服务 | `{ command: 'npm run preview', url: 'http://localhost:4173' }` | 自定义预览服务或 SSR |
+| 复用已运行的地址 | `{ url: 'https://staging.example.com' }` | 本地现有服务、测试站点；跳过构建与起服务 |
 
-export default defineConfig({ serve: { static: 'dist' }, pages: ['/'] })
-```
+启动服务时若端口被占用，工具会尝试结束占用进程。请选择空闲端口；要复用已有服务，请使用 URL 模式。工具自带的静态服务和 HTTPS 前置代理仅监听 `127.0.0.1`。
 
-从其他目录运行时，用 `--config <目录>` 指定配置所在的项目目录：
+子路径部署时，`serve.url` 应包含实际前缀，例如 `http://localhost:4173/app/`，并确认服务正确返回该前缀下的资源。内置静态服务不会自动为构建产物挂载任意资源前缀。
+
+### 使用 `--config` 指定项目目录
 
 ```bash
-npx lhkit init --config ./apps/web       # 在已有的 apps/web 目录生成配置模板
-npx lhkit run --config ./apps/web        # 使用 apps/web 中的配置跑全流程
+npx lhkit init --config ./apps/web
+npx lhkit run --config ./apps/web
 npx lhkit scan /about --config /path/to/your-project
 ```
 
-所有命令都支持 `--config`，参数是**目录，不是配置文件路径**。目录可用绝对路径，也可用相对于当前工作目录的路径。指定后，工具在该目录查找配置，并以它作为项目根目录：构建和服务命令在此执行，配置中的相对路径（如 `serve.static`、`sourceMap.maps`、`ai.sourceRoot`、`outDir`）也以此为基准，默认结果输出到该目录的 `.lhkit/`。
+`--config` 在所有命令中均可用，参数是**已有的目录，不是配置文件路径**。相对目录按当前工作目录解析。该目录成为项目根目录：配置查找、构建和服务命令、配置中的相对路径以及默认 `.lhkit/` 输出均以此为基准。
 
-全部字段和说明见 [types/index.d.ts](types/index.d.ts)，设计细节见 [docs/design.md](docs/design.md) 的“配置文件”一节。几点说明：
+### 通过模型 API 分析
 
-- 字段类型不对（端口、次数、超时、`categories` 等）直接报配置错误，不会悄悄改成别的值。
-- 每个页面对应一个结果目录。会落到同一个目录的两条（例如 `/` 和 `/root`、`/foo` 和 `/foo/`）报配置错误。
-- `serve.static`：工具自带的静态服务。带内容哈希的文件（如 `index-3f2a9c1b.js`）按 `immutable` 长期缓存，其余文件 `no-cache`。有 `.br`/`.gz` 预压缩文件就直接用，没有就对文本文件即时 gzip。`proxy` 的目标地址带路径时保留这段路径，WebSocket 也一样。
-- 工具起的静态服务和 HTTPS（HTTP/2）前置代理只监听 `127.0.0.1`。
-- 站点部署在子路径时（`serve.url` 带路径，如 `http://localhost:4173/app/`），源码对照会先去掉这段前缀。
-- `ai.sourceRoot` 默认：项目有 `src/` 就用 `src/`，否则用项目根目录。
-
-## 命令
-
-| 命令 | 作用 |
-|---|---|
-| `lhkit init` | 生成配置模板 |
-| `lhkit run [页面…]` | 全流程，最后打开总览 |
-| `lhkit build` | 只构建 |
-| `lhkit scan [页面…]` | 不构建：起服务、扫描、分析、出文档 |
-| `lhkit analyze [轮次]` | 对已有轮次重新分析、出文档 |
-| `lhkit preview [轮次]` | 打开总览 |
-| `lhkit compare <A> <B>` | 对比两个轮次 |
-| `lhkit ai-export [轮次]` | 导出供当前助手分析的证据和源码任务，不调用模型 API |
-| `lhkit ai-import <回答文件> [轮次]` | 校验助手建议并写回报告，不重扫、不调用模型 API |
-
-常用参数：`--config DIR`（指定配置所在目录，所有命令均支持）、`--runs N`（每页次数，取中位数）、`--name X`（命名轮次，不会被自动清理）、`--url U`（临时改扫外部地址）、`--ai-dry-run`（只列出 AI 会发送的内容，不发送）。
-
-- 参数只能用在支持它的命令上（例如 `compare` 不接受 `--runs`），用错了按配置错误退出。
-- Chrome、构建目录和端口在开始前就检查。缺了或被占用时直接报错，不会先跑一遍构建。
-
-## 输出
-
-结果在项目的 `.lhkit/`（请加入 `.gitignore`）：每轮一个目录，含总览 `index.html`、每页 `lighthouse.json|html`、`analysis.json`、`docs/dev.md|html`、`docs/lead.md|html`、`logs/`（`build.log`、`serve.log`，以及命令行输出的完整记录 `scan.log`）。`history/` 保存每轮的小汇总。
-
-- 不带 `--name` 的完整轮次只保留最新一轮（`keep: 'latest'`，新一轮全部页面成功后才删上一轮）；`--name` 命名的轮次和只扫部分页面的轮次不会自动删除。
-- 被中断的轮次（Ctrl+C、kill）标为 `aborted`，不写历史，也不会被自动清理。`run`/`scan` 结束时会列出这些轮次以及没有正常结束的轮次。用同一个 `--name` 重跑上次中断的命名轮次，会清掉旧目录重来。
-- 页面在 Lighthouse 的限定时间（45 秒）内没有加载完时照常出分，但扫描输出和两份文档都会标“加载超时，结果可能不完整”。
-- 开发版文档会列出有多少本站 JS/CSS 文件没能对到源码，并说明怎么补 source map。
-- 轮次里记录的 git 信息只看已跟踪文件的改动。未跟踪的新文件（例如 `lhkit.config.mjs`）不算“有未提交的改动”。
-- 退出码：0 成功；1 运行失败或被中断；2 配置错误；3 端口被占用或服务未就绪；4 部分页面失败（文档照常生成）。
-- `LHKIT_NO_OPEN=1` 时不自动打开浏览器（CI、脚本里用）。
-
-## 对比新旧版本
-
-```bash
-git switch <旧提交> && lhkit run --name base
-git switch <新提交> && lhkit run --name new
-lhkit compare base new
-```
-
-两轮的目标地址、Lighthouse 大版本、访问方式、设备或每页次数不同时，对比页顶部有一行提示，说明分数不能直接比较。任一轮只扫了部分页面、中途中断或没有正常结束时，同一行也会标出来。
-
-## 可选：AI 分析
-
-可以让 CLI 调用模型 API，也可以通过通用 skill 复用 Codex、Claude Code 等助手当前会话的模型。两种方式共用源码筛选和建议校验，建议写入已有开发版报告，负责人版指标仍来自真实 Lighthouse 扫描。
-
-### 通过模型 API 自动分析
-
-在 `lhkit.config.mjs` 中只需开启 AI、选择服务商：
+在现有配置中加入或替换 `ai` 字段。以下是可独立使用的示例：
 
 ```js
-ai: { enabled: true, provider: 'deepseek' },
+export default {
+  serve: { static: 'dist' },
+  pages: ['/'],
+  sourceMap: { manifest: 'dist/.vite/manifest.json', maps: 'dist' },
+  ai: {
+    enabled: true,
+    provider: 'deepseek',
+    sourceRoot: 'src',
+    exclude: ['**/private/**'],
+    instructions: '保持现有功能，优先分析影响首屏加载的问题。',
+  },
+}
 ```
 
-然后设置对应环境变量并照常运行 `lhkit run` 或 `lhkit scan`。不写 `provider` 时保持原有 Anthropic 行为。
+```bash
+export DEEPSEEK_API_KEY='你的 Key'
+npx lhkit scan --ai-dry-run   # 先检查将发送的证据与片段，不请求 API
+npx lhkit scan                # 扫描已有构建并调用 API
+# 已有轮次只需补充分析：npx lhkit analyze <轮次>
+```
 
-| `provider` | 默认模型 | 默认 Key 环境变量 | 默认 API 根地址 |
-|---|---|---|---|
-| `anthropic` | `claude-opus-5-5` | `ANTHROPIC_API_KEY` | Anthropic SDK 默认地址 |
+Key 从进程环境读取，工具不自动加载 `.env`。上例使用已存在的 `dist`；需要先构建时，在配置中添加 `build` 并执行 `run`。
+
+| `ai.provider` | 默认模型 | 默认 Key 环境变量 | 默认 API 根地址 |
+| --- | --- | --- | --- |
+| `anthropic`（默认） | `claude-opus-5-5` | `ANTHROPIC_API_KEY` | Anthropic SDK 默认地址，可用 `ANTHROPIC_BASE_URL` 覆盖 |
 | `openai` | `gpt-4.1-mini` | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
 | `deepseek` | `deepseek-flash` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com` |
-| `openai-compatible` | 必须指定 `model` | `OPENAI_API_KEY` | 必须指定 `baseURL` |
+| `openai-compatible` | 必填 `model` | `OPENAI_API_KEY` | 必填 `baseURL` |
 
-模型名可以通过 `model` 自定义。OpenAI 与 DeepSeek 使用 Chat Completions 接口；Codex 是助手入口，通过下方 skill 使用当前会话。接口格式参考 [OpenAI](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) 和 [DeepSeek](https://api-docs.deepseek.com/)。
+表中是工具内置默认值，可用 `model` 自定义。OpenAI、DeepSeek 及兼容服务使用 Chat Completions；Codex 通过 skill 使用当前会话。
 
-常用配置按需增加：
+<details>
+<summary>企业网关与本地兼容服务示例</summary>
 
 ```js
-ai: {
-  enabled: true,
-  provider: 'openai-compatible',
-  baseURL: 'https://gateway.example.com/v1',
-  model: 'your-model',
-  apiKeyEnv: 'LHKIT_API_KEY',
-  sourceRoot: 'src',
-  exclude: ['**/private/**'],
-  maxFindings: 10,
-  instructions: '保持 SSR 和现有交互，优先改善首屏性能。',
-},
+export default {
+  serve: { static: 'dist' },
+  pages: ['/'],
+  sourceMap: { manifest: 'dist/.vite/manifest.json', maps: 'dist' },
+  ai: {
+    enabled: true,
+    provider: 'openai-compatible',
+    baseURL: 'https://gateway.example.com/v1',
+    model: 'your-model',
+    apiKeyEnv: 'LHKIT_API_KEY',
+    responseFormat: 'json',
+  },
+}
 ```
 
-进阶选项都有默认值：
+设置 `LHKIT_API_KEY` 后执行扫描。无需鉴权的本地服务也需要一个非空占位 Key。`baseURL` 保留 `/v1` 等路径前缀，不能包含账户密码、查询参数或 fragment；Anthropic 的显式 `baseURL` 优先于环境变量。网关不支持格式参数时可设 `responseFormat: 'text'`，回答仍须是符合 schema 的 JSON。
 
-| 选项 | 默认值 | 用途 |
-|---|---|---|
-| `responseFormat` | `auto` | Anthropic/OpenAI 使用 JSON schema，DeepSeek/兼容服务使用 JSON；也可设 `json-schema`、`json` 或 `text`。`text` 不传格式参数，仍要求并校验 JSON 回答 |
-| `maxFileChars` / `maxFindingChars` | `8000` / `24000` | 每文件/每问题的源码字符预算；前者不能大于后者，长文件可适当调大 |
-| `concurrency` | `2` | 同时分析的问题数，范围 1–8；设为 1 可顺序分析 |
-| `cache` | `true` | 有效建议缓存到 `<outDir>/ai-cache/`；模型、提示、证据或源码变化后失效；设为 `false` 强制重新请求 |
-| `timeoutMs` | `120000` | 每次请求的超时毫秒数，覆盖连接、响应头及完整正文 |
-| `maxRetries` | `1` | 临时网络错误、限流、服务端错误的重试次数，范围 0–3；鉴权错误不重试 |
-| `maxTokens` | `16000` | 回答 token 上限，推理模型也可能用于推理 token |
-| `language` | `zh-CN` | AI 建议的回答语言；报告固定栏目仍为中文 |
+</details>
 
-`baseURL` 保留 `/v1` 等路径前缀，不能包含账户密码、查询参数或 fragment。兼容服务需要 Key 时设置 `apiKeyEnv` 对应环境变量；不鉴权的本地服务也需设置一个非空占位 Key。网关不支持格式参数时可设 `responseFormat: 'text'`。Anthropic 的 `json` / `text` 通过提示要求 JSON，不使用 schema 约束。
+## Options
 
-Anthropic 也兼容原有 `ANTHROPIC_BASE_URL` 环境变量，显式 `baseURL` 配置优先；实际网关地址参与缓存匹配，切换地址后不会复用另一网关的建议。
+### 命令与参数
 
-每条新建议包含原因、改法、证据充分程度、源码引用和验证步骤。引用必须逐字存在于本次提供的源码中；不存在的文件、引用或不完整回答会被拒收，保留规则建议。证据不足时标为低置信度并列出待确认项。引用校验不代替运行验证，优化效果应按建议的方法复测。重新分析未拿到新建议时保留历史建议，并标注“本次未重新核验”。
+以下示例均可将 `npx lhkit` 换为 `pnpm exec lhkit` 或 `yarn lhkit`。
 
-只处理排名靠前、能关联到源码的问题（默认最多 10 条）。以下文件始终排除：`.env*`、`.npmrc`/`.netrc` 等凭据、私钥与证书、`node_modules`、锁文件、构建产物及结果目录。符号链接的实际目标也检查源码范围和排除规则。用 `ai.exclude` 追加排除规则；相对 glob 以项目根目录为基准，绝对 glob 按绝对路径匹配。先看会发送哪些片段：`lhkit scan --ai-dry-run`，此时不请求 API、不写缓存。没有 Key、请求失败或建议无效时使用规则建议；鉴权或连接故障在重试上限后停止后续调度，已在途的请求可正常结束。
+| 命令 | 作用 |
+| --- | --- |
+| `npx lhkit init` | 生成配置模板 |
+| `npx lhkit run [页面…]` | 构建、起服务、扫描、分析、生成文档并打开总览 |
+| `npx lhkit build` | 仅构建 |
+| `npx lhkit scan [页面…]` | 跳过构建，起服务、扫描、分析并生成文档 |
+| `npx lhkit analyze [轮次]` | 重新分析已有轮次并生成文档，可调用已启用的模型 API |
+| `npx lhkit preview [轮次]` | 打开总览 |
+| `npx lhkit compare <A> <B>` | 生成两轮对比文档 |
+| `npx lhkit ai-export [轮次]` | 导出会话分析任务，不调用 API |
+| `npx lhkit ai-import <回答文件> [轮次]` | 校验并写回会话建议，不重扫、不调用 API |
 
-### 通过通用 skill 使用当前助手
+| 参数 | 支持命令 | 说明 |
+| --- | --- | --- |
+| `--config DIR` | 所有命令 | 指定配置所在的项目目录 |
+| `--runs N` | `run`、`scan` | 每页扫描次数，取中位数，正整数 |
+| `--name NAME` | `run`、`scan` | 命名轮次，免于自动清理；使用未用过的名称 |
+| `--url URL` | `run`、`scan` | 临时切为 URL 模式，即使使用 `run` 也跳过构建 |
+| `--ai-dry-run` | `run`、`scan`、`analyze` | 预览已启用的 API 分析任务，不请求 API、不写 AI 缓存 |
+| `--force` | `init` | 覆盖已有配置 |
+| `--help` / `--version` | 顶层调用 | `npx lhkit --help` / `npx lhkit --version` |
 
-仓库和 npm 包都包含 [skills/lighthouse-kit/SKILL.md](skills/lighthouse-kit/SKILL.md)，遵循 [Agent Skills 规范](https://agentskills.io/specification)。复制到目标项目中即可使用，不需要为 CLI 另配模型 API Key：
+页面参数须以 `/` 开头，传入后替换配置中的页面选择，轮次标记为部分扫描。轮次名称以字母或数字开头，只包含字母、数字、`.`、`_`、`-`。不支持的参数会报配置错误。
+
+### 常用配置项
+
+| 配置项 | 默认值 | 用途 |
+| --- | --- | --- |
+| `build.command` / `build.env` | 不构建 / `{}` | 项目构建命令及附加环境变量，URL 模式忽略 |
+| `pages` | 必填 | 非空页面路径数组；会写入同一结果目录的重复页面会报错 |
+| `serve.port` / `serve.proxy` | `4173` / `{}` | 静态模式端口和接口前缀代理，支持 WebSocket |
+| `serve.readyPath` / `serve.timeoutMs` | `'/'` / `60000` | 服务就绪探测路径和超时（毫秒） |
+| `runs` / `visit` | `1` / `'first'` | 多次取中位数；`'repeat'` 会先预热以测试回访 |
+| `formFactor` | `'mobile'` | 当前仅支持移动端配置 |
+| `categories` | 五类全扫 | `performance`、`accessibility`、`best-practices`、`seo`、`agentic-browsing` |
+| `beforePage` | 无 | `async ({ page, url, warmup }) => {}`，准备登录态或页面状态 |
+| `sourceMap.manifest` / `sourceMap.maps` | 未设置 | manifest 文件和 source map 目录 |
+| `docs.audiences` | `['dev', 'lead']` | 开发版和负责人版文档 |
+| `outDir` / `keep` | `'.lhkit'` / `'latest'` | 结果目录及未命名完整轮次保留策略；`keep` 也可为正整数 |
+| `chromePath` | 自动查找 | Chrome / Chromium 可执行文件路径 |
+| `https.enabled` / `https.port` | `false` / `4443` | 本地 HTTP/2 自签证书前置代理，URL 模式忽略 |
+
+### AI 配置项
+
+`ai.enabled` 默认 `false`。从 `provider`、`sourceRoot` 和 `instructions` 开始，其余通常无需修改。
+
+| `ai` 字段 | 默认值 | 用途 |
+| --- | --- | --- |
+| `provider` / `model` / `baseURL` / `apiKeyEnv` | 见服务商表 | 选择模型服务、模型、网关和 Key 环境变量 |
+| `sourceRoot` | 有 `src/` 时用它，否则项目根目录 | 限定允许提供的源码范围 |
+| `exclude` | 内置排除项 | 追加 glob；相对规则以项目根目录为基准，绝对规则匹配绝对路径 |
+| `maxFindings` | `10` | 最多分析多少条有源码关联的问题 |
+| `instructions` / `language` | `''` / `'zh-CN'` | 业务约束与 AI 回答语言；报告固定栏目仍为中文 |
+| `maxFileChars` / `maxFindingChars` | `8000` / `24000` | 每文件 / 每问题的源码字符预算，前者不能大于后者 |
+| `responseFormat` | `'auto'` | Anthropic/OpenAI 用 JSON schema，DeepSeek/兼容服务用 JSON；可指定 `'json-schema'`、`'json'`、`'text'` |
+| `concurrency` / `cache` | `2` / `true` | API 并发数（1–8）；有效建议缓存于 `<outDir>/ai-cache/` |
+| `timeoutMs` / `maxRetries` | `120000` / `1` | 单次完整请求超时（毫秒）；临时错误重试 0–3 次，鉴权错误不重试 |
+| `maxTokens` | `16000` | 回答 token 上限，推理模型也可能计入推理 token |
+
+`responseFormat: 'text'` 只是不传格式参数，仍校验 JSON 回答；Anthropic 的 `'json'` / `'text'` 通过提示要求 JSON。缓存按服务商、实际网关、模型、提示、证据和源码内容匹配，改变这些输入会失效；设 `cache: false` 可强制重新请求。
+
+## 规则
+
+### 问题如何筛选和排序
+
+1. 从实际 Lighthouse 审计提取问题：只收集 `metricSavings`、`numeric`、`binary` 类型中分数小于 `0.9` 的项目；性能分类的 `metrics`、`hidden` 组不作为优化问题。
+2. 按审计 ID 合并多页面问题。性能问题排在前面，按各页面影响值之和降序；相同时依次比较代表页面的节省字节数、受影响页面数、审计 ID。其他问题按受影响页面数降序，再按 ID 排序。
+3. 影响值使用 `0.25 × LCP + 0.30 × TBT + 0.10 × FCP + 0.25 × CLS × 1000`，前三项取 Lighthouse 估算可节省的毫秒数。**这是工具的排序依据，不是预计提分，也不是实测优化收益。**
+4. 内置 [规则库](src/analyze/rules.mjs) 提供问题分类与改法；未覆盖的审计保留 Lighthouse 标题和说明。manifest / source map 提供源码关联线索，仍需核实实际调用路径。
+
+可用 `categories` 调整扫描分类，用 `ai.sourceRoot`、`exclude`、字符预算和 `instructions` 控制分析范围与业务约束。目前没有用户自定义 `rules` 配置字段；修改内置规则需编辑规则库。
+
+### AI 建议如何校验
+
+- 只为排名靠前且能关联到允许源码的问题生成任务。每条建议需包含原因、改法、置信度、源码引用与验证步骤；引用文件及逐字引用必须匹配本次提供的片段。
+- 没有引用的建议只允许低置信度，并需说明证据缺口。置信度表示证据充分程度；引用有效仍需通过运行验证确认原因与收益。
+- 没有 Key、请求失败或回答无效时保留规则建议；重新分析未获得新建议时，可保留历史建议并标注“本次未重新核验”。
+- 始终排除 `.env*`、凭据、私钥证书、`node_modules`、锁文件、构建产物和结果目录；符号链接的实际目标同样检查范围与排除规则。`ai.exclude` 追加排除项。
+
+先确认页面实际渲染、脚本和接口正常，再解读分数。资源路径错误或空白页也可能得到较高分；报告中的加载超时、控制台错误和源码缺失提示应一并处理。按同一页面、访问模式和设备复测，验证优化收益与功能回归。
+
+### 会话建议写回报告
+
+已有轮次可直接从 `ai-export` 开始。需要新扫描时，使用一个新的轮次名：
 
 ```bash
-# 已在目标项目安装含有 ai-export / ai-import 的 lighthouse-kit 版本后
-# Codex（项目级）
-mkdir -p .agents/skills
-cp -R node_modules/lighthouse-kit/skills/lighthouse-kit .agents/skills/
-
-# Claude Code（项目级）
-mkdir -p .claude/skills
-cp -R node_modules/lighthouse-kit/skills/lighthouse-kit .claude/skills/
+LHKIT_NO_OPEN=1 npx lhkit run --name review-001 --ai-dry-run --config ./apps/web
+npx lhkit ai-export review-001 --config ./apps/web
+# 助手读取命令输出指向的 ai/request.json，按 SKILL.md 格式生成 reply.json
+npx lhkit ai-import ./reply.json review-001 --config ./apps/web
 ```
 
-本地 link 开发时，也可从本仓库的 `skills/lighthouse-kit` 复制。个人目录分别为 `~/.agents/skills/` 和 `~/.claude/skills/`，见 [Codex 发现规则](https://developers.openai.com/codex/skills/) 和 [Claude Code 安装位置](https://code.claude.com/docs/en/skills)。
+`ai-export` 无需开启 `ai.enabled`。回答需原样带回 `requestId`、`roundId`，并注明实际模型名或会话标签。源码或分析任务输入变化后需重新导出。任务为空时先检查 source map、源码范围及排除项，不能据此编造代码原因。
 
-Codex 输入“用 `$lighthouse-kit` 分析这个项目”，Claude Code 输入 `/lighthouse-kit`。以 DeepSeek 为后端、支持 Agent Skills 且能读写文件和运行命令的宿主，可加载同一份 skill。只有聊天界面时，需要手动导出任务、保存模型回答后再导入。
+`ai-import` 支持部分任务回答；整批校验通过后更新原轮次分析和报告，不新增扫描或历史。重复导入不重复累计源码记录，同轮导入串行处理，产物替换失败会尝试回滚。回答文件路径按命令的当前工作目录解析，与 `--config` 分开。
 
-也可以手动运行完整流程：
+### 报告、对比与退出码
+
+默认输出到 `.lhkit/`，请加入 `.gitignore`：
+
+```text
+.lhkit/
+├── runs/<轮次>/
+│   ├── index.html                  # 总览
+│   ├── pages/<页面>/run-N/lighthouse.* # 每次扫描的原始 JSON / HTML
+│   ├── analysis.json               # 合并问题和 AI 建议
+│   ├── docs/{dev,lead}.{md,html}    # 开发版 / 负责人版
+│   ├── ai/request.json             # 执行 ai-export 后生成
+│   └── logs/                       # 构建、服务、扫描日志
+├── history/                        # 各轮次摘要
+└── ai-cache/                       # API 建议缓存（按需生成）
+```
+
+默认只清理未命名的完整轮次，且在新一轮全部页面成功后清理；命名、部分扫描和中断轮次保留。重跑同名的已中断轮次会清理旧目录，已完成的命名轮次不能覆盖。
 
 ```bash
-# 会话分析模式：保证不额外调用配置中的模型 API
-LHKIT_NO_OPEN=1 lhkit run --name review --ai-dry-run --config ./apps/web
-lhkit ai-export review --config ./apps/web
-# 让助手读取输出指向的 ai/request.json，按 skill 中的格式生成回答 JSON
-lhkit ai-import ./reply.json review --config ./apps/web
+npx lhkit run --name before --runs 3
+# 完成业务代码优化后，保持页面、服务与配置一致
+npx lhkit run --name after --runs 3
+npx lhkit compare before after
 ```
 
-已有扫描结果时直接 `ai-export` 即可，省略轮次时选最近一轮已结束的结果。`ai-export` 无需打开 `ai.enabled`；导出本身不记作已发送。回答需带本次导出的 `requestId`、`roundId`、实际模型名或会话标签，以及带引用和验证步骤的 `findings`。完整格式见 skill。
+目标地址、Lighthouse 大版本、访问方式、设备或次数不一致，以及部分扫描或未完成轮次，都会显示对比提示。`LHKIT_NO_OPEN=1` 可关闭自动打开浏览器，适合 CI。
 
-`ai-import` 支持只回答部分任务，重复导入不重复累计源码记录。同一轮次的导入串行执行，先生成完整产物再替换，替换失败时回滚。整批校验通过后才更新该轮分析和报告，不调用 API、不重扫、不新增轮次或历史；校验失败退出码为 2，原分析与文档不变。导出后源码或分析配置变化时需重新导出。回答文件相对执行命令时的工作目录解析，与 `--config` 分开。
+| 退出码 | 含义 |
+| --- | --- |
+| `0` | 成功 |
+| `1` | 运行失败、全部页面失败或中断 |
+| `2` | 配置、参数或导入校验错误 |
+| `3` | 端口无法释放或服务未就绪 |
+| `4` | 部分页面失败，成功页面的报告仍会生成 |
 
-## 发布到 npm（维护者）
-
-```bash
-npm login                      # 首次
-npm version patch              # 或 minor / major：改版本号并打 tag
-npm publish                    # 发布前会自动跑单元测试（prepublishOnly）
-git push --follow-tags
-```
-
-发布的包只含 `bin/`、`src/`、`types/`、`skills/`、README 和 LICENSE（见 `package.json` 的 `files`）。发布前可用 `npm pack --dry-run` 查看内容。
+[返回安装](#安装) · [配置](#配置) · [Options](#options) · [English](README.en.md)
