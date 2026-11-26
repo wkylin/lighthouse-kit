@@ -31,6 +31,13 @@ const fail = (message) => {
   throw new ConfigError(`配置错误：${message}`)
 }
 
+const AI_DEFAULTS = {
+  anthropic: { model: 'claude-opus-5-5', apiKeyEnv: 'ANTHROPIC_API_KEY', baseURL: null },
+  openai: { model: 'gpt-4.1-mini', apiKeyEnv: 'OPENAI_API_KEY', baseURL: 'https://api.openai.com/v1' },
+  deepseek: { model: 'deepseek-flash', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com' },
+  'openai-compatible': { model: null, apiKeyEnv: 'OPENAI_API_KEY', baseURL: null },
+}
+
 /** 页面路径必须以 / 开头，且不能有两页落到同一个结果目录。 */
 export function checkPages(pages) {
   const seen = new Map()
@@ -129,11 +136,38 @@ export function normalizeConfig(raw, root, configFile, overrides = {}) {
     fail("docs.audiences 只能包含 'dev' 和 'lead'")
 
   const aiRaw = isObject(raw.ai) ? raw.ai : {}
+  if (raw.ai != null && !isObject(raw.ai)) fail('ai 必须是配置对象')
+  const provider = aiRaw.provider ?? 'anthropic'
+  if (typeof provider !== 'string' || !Object.hasOwn(AI_DEFAULTS, provider))
+    fail(`ai.provider 只能取 ${Object.keys(AI_DEFAULTS).join('、')}`)
+  const aiDefaults = AI_DEFAULTS[provider]
+  for (const key of ['enabled', 'cache'])
+    if (aiRaw[key] != null && typeof aiRaw[key] !== 'boolean') fail(`ai.${key} 必须是布尔值`)
   if (aiRaw.exclude != null && (!Array.isArray(aiRaw.exclude) || aiRaw.exclude.some((p) => typeof p !== 'string' || !p)))
     fail('ai.exclude 必须是字符串数组，例如 ["**/secret/**"]')
-  if (aiRaw.maxFindings != null && !isPositiveInt(aiRaw.maxFindings)) fail('ai.maxFindings 必须是正整数')
-  for (const key of ['model', 'apiKeyEnv', 'sourceRoot'])
-    if (aiRaw[key] != null && (typeof aiRaw[key] !== 'string' || !aiRaw[key])) fail(`ai.${key} 必须是非空字符串`)
+  for (const key of ['maxFindings', 'timeoutMs', 'maxTokens', 'maxFileChars', 'maxFindingChars', 'concurrency'])
+    if (aiRaw[key] != null && (!Number.isSafeInteger(aiRaw[key]) || aiRaw[key] < 1)) fail(`ai.${key} 必须是正整数`)
+  if (aiRaw.concurrency > 8) fail('ai.concurrency 只能取 1–8')
+  if (aiRaw.timeoutMs > 2147483647) fail('ai.timeoutMs 不能大于 2147483647')
+  if (aiRaw.maxRetries != null && (!Number.isInteger(aiRaw.maxRetries) || aiRaw.maxRetries < 0 || aiRaw.maxRetries > 3))
+    fail('ai.maxRetries 只能取 0–3')
+  for (const key of ['model', 'apiKeyEnv', 'sourceRoot', 'baseURL', 'language'])
+    if (aiRaw[key] != null && (typeof aiRaw[key] !== 'string' || !aiRaw[key].trim())) fail(`ai.${key} 必须是非空字符串`)
+  if (aiRaw.instructions != null && typeof aiRaw.instructions !== 'string') fail('ai.instructions 必须是字符串')
+  const responseFormat = aiRaw.responseFormat ?? 'auto'
+  if (!['auto', 'json-schema', 'json', 'text'].includes(responseFormat)) fail('ai.responseFormat 只能取 auto、json-schema、json、text')
+  const maxFileChars = aiRaw.maxFileChars ?? 8000
+  const maxFindingChars = aiRaw.maxFindingChars ?? 24000
+  if (maxFileChars > maxFindingChars) fail('ai.maxFileChars 不能大于 ai.maxFindingChars')
+  let baseURL = aiRaw.baseURL ?? aiDefaults.baseURL
+  if (baseURL) {
+    let u
+    try { u = new URL(baseURL) } catch { fail('ai.baseURL 必须是 HTTP/HTTPS 地址') }
+    if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.search || u.hash)
+      fail('ai.baseURL 必须是 HTTP/HTTPS 地址，不能包含账户密码、查询参数或 fragment')
+    baseURL = u.href.replace(/\/+$/, '')
+  }
+  if (provider === 'openai-compatible' && (!aiRaw.model || !baseURL)) fail('openai-compatible 需要配置 ai.model 和 ai.baseURL')
   const exclude = [...BUILTIN_EXCLUDE]
   for (const p of aiRaw.exclude ?? []) if (!exclude.includes(p)) exclude.push(p)
 
@@ -156,8 +190,20 @@ export function normalizeConfig(raw, root, configFile, overrides = {}) {
     docs: { audiences: [...audiences], lang: 'zh-CN' },
     ai: {
       enabled: aiRaw.enabled === true,
-      model: aiRaw.model ?? 'claude-opus-5-5',
-      apiKeyEnv: aiRaw.apiKeyEnv ?? 'ANTHROPIC_API_KEY',
+      provider,
+      model: (aiRaw.model ?? aiDefaults.model).trim(),
+      apiKeyEnv: (aiRaw.apiKeyEnv ?? aiDefaults.apiKeyEnv).trim(),
+      baseURL,
+      responseFormat,
+      timeoutMs: aiRaw.timeoutMs ?? 120000,
+      maxRetries: aiRaw.maxRetries ?? 1,
+      maxTokens: aiRaw.maxTokens ?? 16000,
+      concurrency: aiRaw.concurrency ?? 2,
+      cache: aiRaw.cache ?? true,
+      maxFileChars,
+      maxFindingChars,
+      language: aiRaw.language?.trim() ?? 'zh-CN',
+      instructions: aiRaw.instructions ?? '',
       // 默认只看 src/（有的话），不把整个项目当作可发送的源码。
       sourceRoot: abs(aiRaw.sourceRoot ?? (fs.existsSync(path.join(root, 'src')) ? 'src' : '.')),
       maxFindings: aiRaw.maxFindings ?? 10,

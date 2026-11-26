@@ -101,6 +101,13 @@ function findingsSection(a, lines) {
       // 逐行放进引用块，保留 AI 给出的分行和代码块。
       const quoted = (text) => text.split('\n').map((l) => (l ? `> ${l}` : '>'))
       lines.push(`> **AI 建议**（${f.ai.model}）`, '>', ...quoted(`原因：${f.ai.cause}`), '>', ...quoted(`改法：${f.ai.fix}`), '')
+      if (f.ai.carried) lines.push('> 沿用此前建议，本次未重新核验。', '')
+      if (f.ai.confidence) {
+        const label = { high: '较充分', medium: '部分充分', low: '不足，需确认' }[f.ai.confidence]
+        lines.push(`> 证据充分程度：${label}（不代表模型正确率）`, '')
+      }
+      for (const e of f.ai.evidence ?? []) lines.push(...quoted(`源码引用：${e.file}\n\n\`\`\`\n${e.quote}\n\`\`\``), '')
+      if (f.ai.verification?.length) lines.push('> 验证步骤：', ...f.ai.verification.flatMap((s) => quoted(`- ${s}`)), '')
     }
   })
 }
@@ -143,7 +150,10 @@ function pagesSection(a, lines) {
 
 function aiAppendix(a, lines) {
   if (!a.aiSent.length) return
-  lines.push('## 附：发送给 AI 的内容', '', '本轮 AI 分析发送了以下源文件片段：', '')
+  const description = a.findings.some((f) => f.ai?.carried)
+    ? '以下包含本次发送记录，以及沿用建议对应的历史发送记录：'
+    : '本轮 AI 分析发送了以下源文件片段：'
+  lines.push('## 附：发送给 AI 的内容', '', description, '')
   lines.push('| 问题 | 文件 | 字符数 |', '|---|---|---|')
   for (const s of a.aiSent) lines.push(`| \`${cell(s.finding)}\` | \`${cell(s.file)}\` | ${s.chars} |`)
   lines.push('')

@@ -54,7 +54,9 @@ ${serve}  // serve: { url: 'https://staging.example.com' },
   // visit: 'repeat',                                // 'first' 首次访问（默认）；'repeat' 回访
   // sourceMap: { manifest: 'dist/.vite/manifest.json', maps: 'dist' },
   docs: { audiences: ['dev', 'lead'] },
-  ai: { enabled: false, sourceRoot: 'src' },        // 打开后需要环境变量 ANTHROPIC_API_KEY
+  ai: { enabled: false, sourceRoot: 'src' },        // API 分析：可加 provider: 'openai' / 'deepseek'；Key 从对应环境变量读取
+  // ai: { enabled: true, provider: 'deepseek', maxFindings: 10, concurrency: 2 },
+  // 在助手当前会话中分析：保持 API 关闭，使用 lighthouse-kit skill 或 lhkit ai-export / ai-import。
 }
 `
   fs.writeFileSync(file, text)

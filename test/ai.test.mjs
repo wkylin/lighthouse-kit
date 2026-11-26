@@ -18,7 +18,7 @@ async function project(files) {
 }
 
 function configFor(root, ai = {}) {
-  return normalizeConfig({ serve: { url: 'https://x.test' }, pages: ['/'], ai: { enabled: true, apiKeyEnv: KEY_ENV, sourceRoot: 'src', ...ai } }, root, path.join(root, 'lhkit.config.mjs'))
+  return normalizeConfig({ serve: { url: 'https://x.test' }, pages: ['/'], ai: { enabled: true, apiKeyEnv: KEY_ENV, sourceRoot: 'src', cache: false, concurrency: 1, ...ai } }, root, path.join(root, 'lhkit.config.mjs'))
 }
 
 const finding = (id, files) => ({
@@ -30,7 +30,9 @@ const finding = (id, files) => ({
 
 const analysisWith = (findings) => ({ round: { id: 'r', origin: 'https://x.test' }, pages: [], findings, facts: {}, aiSent: [] })
 
-function fakeClient(reply = () => ({ stop_reason: 'end_turn', model: 'claude-opus-5-5', content: [{ type: 'text', text: JSON.stringify({ cause: '原因', fix: '改法' }) }] })) {
+const validReply = () => ({ stop_reason: 'end_turn', model: 'claude-opus-5-5', content: [{ type: 'text', text: JSON.stringify({ cause: '原因，仍需确认调用路径', fix: '改法，先验证前提', confidence: 'low', evidence: [], verification: ['同构建同页面复测并检查回归'] }) }] })
+
+function fakeClient(reply = validReply) {
   const calls = []
   return { calls, create: async (params) => (calls.push(params), reply(params)) }
 }
@@ -71,7 +73,7 @@ test('only the top maxFindings findings that have a source file are sent', async
   assert.deepEqual(params.betas, ['server-side-fallback-2026-07-01'])
   assert.equal(params.fallbacks, 'default')
   assert.equal(params.output_config.format.type, 'json_schema')
-  assert.deepEqual(params.output_config.format.schema.required, ['cause', 'fix'])
+  assert.deepEqual(params.output_config.format.schema.required, ['cause', 'fix', 'confidence', 'evidence', 'verification'])
   assert.ok(JSON.stringify(params.messages).includes('src/a.vue'))
 })
 
@@ -100,7 +102,7 @@ test('a valid JSON reply fills ai {cause, fix, model}', async () => {
   process.env[KEY_ENV] = 'test-key'
   const root = await project({ 'src/a.vue': 'a' })
   const out = await enrichWithAi(analysisWith([finding('x', ['src/a.vue'])]), configFor(root), { dryRun: false, client: fakeClient(), warn() {} })
-  assert.deepEqual(out.findings[0].ai, { cause: '原因', fix: '改法', model: 'claude-opus-5-5' })
+  assert.deepEqual(out.findings[0].ai, { ...JSON.parse(validReply().content[0].text), model: 'claude-opus-5-5' })
 })
 
 test('client errors fall back to rule advice', async () => {
@@ -176,4 +178,112 @@ test('a symlink inside sourceRoot that points outside it is not followed', async
   const client = fakeClient()
   await enrichWithAi(analysisWith([finding('x', ['src/ok.vue', 'src/link.vue'])]), configFor(root), { dryRun: false, client, warn() {} })
   assert.ok(!JSON.stringify(client.calls).includes('OUTSIDE'))
+})
+
+test('source context honors budgets and locates exact evidence in long files', async () => {
+  const text = Array.from({ length: 200 }, (_, i) => `line ${i + 1}: value\n`).join('')
+  const root = await project({ 'src/long.js': text })
+  const f = finding('long', ['src/long.js'])
+  f.evidence[0].snippet = 'line 170: value'
+  const [source] = await collectSources(f, configFor(root, { maxFileChars: 180, maxFindingChars: 300 }))
+  assert.ok(source.text.includes('line 170: value'))
+  assert.ok(source.text.length <= 180)
+  assert.ok(source.truncated)
+  assert.equal(source.startLine, text.slice(0, text.indexOf(source.text)).split('\n').length)
+  assert.match(source.hash, /^[a-f0-9]{64}$/)
+})
+
+test('symlinks cannot bypass custom exclusions or build output exclusions', async () => {
+  const root = await project({ 'src/ok.js': 'OK', 'src/private/hidden.js': 'SECRET', 'src/dist/app.js': 'BUILT' })
+  await fs.symlink(path.join(root, 'src/private/hidden.js'), path.join(root, 'src/alias.js'))
+  await fs.symlink(path.join(root, 'src/dist/app.js'), path.join(root, 'src/bundle.js'))
+  const cfg = normalizeConfig({ serve: { static: 'src/dist' }, pages: ['/'], ai: { sourceRoot: 'src', exclude: ['**/private/**'] } }, root, path.join(root, 'lhkit.config.mjs'))
+  assert.deepEqual((await collectSources(finding('x', ['src/ok.js', 'src/alias.js', 'src/bundle.js']), cfg)).map((s) => s.file), ['src/ok.js'])
+})
+
+test('the task queue bounds concurrency and keeps findings in priority order', async () => {
+  const root = await project({ 'src/a.js': 'source' })
+  let active = 0
+  let peak = 0
+  const client = fakeClient(async () => {
+    peak = Math.max(peak, ++active)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    active--
+    return validReply()
+  })
+  const out = await enrichWithAi(analysisWith(['a', 'b', 'c', 'd', 'e'].map((id) => finding(id, ['src/a.js']))), configFor(root, { concurrency: 2 }), { client })
+  assert.equal(peak, 2)
+  assert.deepEqual(out.findings.map((f) => f.id), ['a', 'b', 'c', 'd', 'e'])
+  assert.equal(out.findings.filter((f) => f.ai).length, 5)
+})
+
+test('content cache avoids requests and invalidates on source, model, instructions or cache override', async () => {
+  const root = await project({ 'src/a.js': 'source' })
+  const analysis = analysisWith([finding('a', ['src/a.js'])])
+  const client = fakeClient()
+  const run = (overrides = {}) => enrichWithAi(analysis, configFor(root, { cache: true, ...overrides }), { client })
+  await run()
+  const cached = await run()
+  assert.equal(client.calls.length, 1)
+  assert.deepEqual(cached.aiSent, [])
+  assert.ok(cached.findings[0].ai)
+  await fs.writeFile(path.join(root, 'src/a.js'), 'changed source')
+  await run()
+  await run({ model: 'another-model' })
+  await run({ instructions: 'Keep SSR' })
+  await run({ cache: false })
+  assert.equal(client.calls.length, 5)
+})
+
+test('fatal failure stops queued work even with concurrent requests already in flight', async () => {
+  const root = await project({ 'src/a.js': 'source' })
+  const client = fakeClient(() => { throw Object.assign(new Error('unauthorized'), { status: 401 }) })
+  const warnings = []
+  await enrichWithAi(analysisWith(['a', 'b', 'c', 'd', 'e'].map((id) => finding(id, ['src/a.js']))), configFor(root, { concurrency: 2 }), { client, warn: (m) => warnings.push(m) })
+  assert.ok(client.calls.length >= 1 && client.calls.length <= 2)
+  assert.equal(warnings.length, 1)
+})
+
+test('dry-run with cache enabled neither calls fetch nor creates a cache directory', async () => {
+  const root = await project({ 'src/a.js': 'source' })
+  const cfg = configFor(root, { cache: true })
+  let calls = 0
+  const result = await enrichWithAi(analysisWith([finding('a', ['src/a.js'])]), cfg, { dryRun: true, fetch: async () => { calls++; throw new Error('must not call') } })
+  assert.equal(calls, 0)
+  assert.equal(result.aiPlanned.length, 1)
+  await assert.rejects(fs.access(path.join(cfg.outDir, 'ai-cache')))
+})
+
+test('mandatory dependency and lock exclusions also cover hidden directories', async () => {
+  const root = await project({ 'src/ok.js': 'OK', 'src/node_modules/.pnpm/pkg/index.js': 'DEPENDENCY', 'src/.hidden/pnpm-lock.yaml': 'LOCK' })
+  const result = await collectSources(finding('x', ['src/ok.js', 'src/node_modules/.pnpm/pkg/index.js', 'src/.hidden/pnpm-lock.yaml']), configFor(root))
+  assert.deepEqual(result.map((s) => s.file), ['src/ok.js'])
+})
+
+test('absolute exclusions hold across a symlinked project root and source aliases', async () => {
+  const root = await project({ 'src/ok.js': 'OK', 'src/private/hidden.js': 'PRIVATE' })
+  const linkedRoot = `${root}-linked`
+  await fs.symlink(root, linkedRoot)
+  try {
+    await fs.symlink(path.join(root, 'src/private/hidden.js'), path.join(root, 'src/alias.js'))
+    const cfg = configFor(linkedRoot, { exclude: [path.join(linkedRoot, 'src/private/**')] })
+    assert.deepEqual((await collectSources(finding('x', ['src/ok.js', 'src/alias.js']), cfg)).map((s) => s.file), ['src/ok.js'])
+  } finally { await fs.unlink(linkedRoot) }
+})
+
+test('Anthropic cache includes the effective environment-configured gateway', async () => {
+  const root = await project({ 'src/a.js': 'source' })
+  const analysis = analysisWith([finding('a', ['src/a.js'])])
+  const client = fakeClient()
+  const before = process.env.ANTHROPIC_BASE_URL
+  try {
+    process.env.ANTHROPIC_BASE_URL = 'https://first-gateway.test'
+    await enrichWithAi(analysis, configFor(root, { cache: true }), { client })
+    process.env.ANTHROPIC_BASE_URL = 'https://second-gateway.test'
+    await enrichWithAi(analysis, configFor(root, { cache: true }), { client })
+    assert.equal(client.calls.length, 2)
+  } finally {
+    if (before == null) delete process.env.ANTHROPIC_BASE_URL
+    else process.env.ANTHROPIC_BASE_URL = before
+  }
 })

@@ -5,6 +5,8 @@ import path from 'node:path'
 import { parseArgs } from 'node:util'
 import { analyzeRound, readAnalysis, writeAnalysis } from './analyze/index.mjs'
 import { carryForwardAi, enrichWithAi } from './ai/index.mjs'
+import { exportAiRequest, importAiReply, readAiJson } from './ai/exchange.mjs'
+import { stageImportOutputs, withImportLock } from './ai/import-output.mjs'
 import { runBuild } from './build.mjs'
 import { compareRounds } from './compare.mjs'
 import { findChrome } from './chrome.mjs'
@@ -30,6 +32,8 @@ const ALLOWED = {
   analyze: ['ai-dry-run', 'config'],
   preview: ['config'],
   compare: ['config'],
+  'ai-export': ['config'],
+  'ai-import': ['config'],
 }
 
 const OPTIONS = {
@@ -114,6 +118,10 @@ async function writeOutputs(roundDir, config, meta, log, { dryRun }) {
     log.info(`AI 试运行：本会发送 ${planned.length} 个源文件片段，共 ${chars} 个字符（未发送）`)
     for (const s of planned) log.info(`  ${s.file}  ${s.chars} 字符（问题 ${s.finding}）`)
   }
+  return renderOutputs(roundDir, analysis, config, meta)
+}
+
+async function renderOutputs(roundDir, analysis, config, meta) {
   await writeAnalysis(roundDir, analysis)
   const { entry, ctx } = await docsContext(config.outDir, meta, analysis.pages)
   const docs = await writeDocs(roundDir, analysis, config, ctx)
@@ -254,6 +262,31 @@ export async function runCli(argv, { cwd = process.cwd(), env = process.env, log
       if (!fs.existsSync(index)) throw new ConfigError(`配置错误：${index} 不存在，请先运行 lhkit analyze`)
       log.info(`总览：${index}`)
       openInBrowser(index, env)
+      return 0
+    }
+    case 'ai-export': {
+      if (positionals.length > 1) throw new ConfigError('配置错误：用法 lhkit ai-export [轮次]')
+      const config = await loadConfig(configDir)
+      const dir = await resolveRound(config.outDir, positionals[0])
+      const analysis = await readAiJson(path.join(dir, 'analysis.json'))
+      const { file, request } = await exportAiRequest(dir, analysis, config)
+      log.info(`AI 任务：${file}（${request.tasks.length} 条，未调用模型 API）`)
+      if (!request.tasks.length) log.warn('没有能关联到允许源码的问题，请检查 source map、ai.sourceRoot 和排除规则')
+      return 0
+    }
+    case 'ai-import': {
+      if (positionals.length < 1 || positionals.length > 2) throw new ConfigError('配置错误：用法 lhkit ai-import <回答文件> [轮次]')
+      const config = await loadConfig(configDir)
+      const dir = await resolveRound(config.outDir, positionals[1])
+      const out = await withImportLock(dir, async () => {
+        const previous = await readAiJson(path.join(dir, 'analysis.json'))
+        const reply = await readAiJson(path.resolve(cwd, positionals[0]))
+        const analysis = await importAiReply(dir, previous, config, reply)
+        const meta = await readRoundMeta(dir)
+        return stageImportOutputs(dir, config, (stage) => renderOutputs(stage, analysis, config, meta))
+      })
+      for (const f of out.docs.filter((d) => d.endsWith('.md'))) log.info(`文档：${f}`)
+      log.info(`总览：${out.index}`)
       return 0
     }
     case 'compare': {

@@ -37,7 +37,8 @@
   "files": [
     "bin",
     "src",
-    "types"
+    "types",
+    "skills"
   ],
   "engines": {
     "node": ">=22.19"

@@ -19,7 +19,7 @@ test('the package can be published: not private, MIT, points at its GitHub repos
 test('the published tarball has the CLI, the code and the config types, and no tests, docs or examples', () => {
   const [report] = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))
   const files = report.files.map((f) => f.path)
-  for (const f of ['bin/lhkit.mjs', 'src/cli.mjs', 'src/index.mjs', 'types/index.d.ts', 'README.md', 'LICENSE', 'package.json']) assert.ok(files.includes(f), f)
+  for (const f of ['bin/lhkit.mjs', 'src/cli.mjs', 'src/index.mjs', 'types/index.d.ts', 'skills/lighthouse-kit/SKILL.md', 'README.md', 'LICENSE', 'package.json']) assert.ok(files.includes(f), f)
   for (const f of files) assert.ok(!/^(test|docs|examples|\.superpowers|\.github)\//.test(f), `${f} should not be published`)
 })
 

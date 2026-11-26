@@ -6,7 +6,10 @@
  *   https: {enabled: boolean, port: number}, pages: string[], beforePage: ((ctx:{page:any, url:string, warmup:boolean}) => Promise<void>)|null,
  *   runs: number, visit: 'first'|'repeat', formFactor: 'mobile', categories: string[], chromePath: string|null,
  *   sourceMap: {manifest: string|null, maps: string|null}, docs: {audiences: ('dev'|'lead')[], lang: 'zh-CN'},
- *   ai: {enabled: boolean, model: string, apiKeyEnv: string, sourceRoot: string, maxFindings: number, exclude: string[]},
+ *   ai: {enabled: boolean, provider: import('../types/index.d.ts').AiProvider, model: string, apiKeyEnv: string, baseURL: string|null,
+ *     responseFormat: 'auto'|'json-schema'|'json'|'text', timeoutMs: number, maxRetries: number, maxTokens: number,
+ *     concurrency: number, cache: boolean, maxFileChars: number, maxFindingChars: number, language: string, instructions: string,
+ *     sourceRoot: string, maxFindings: number, exclude: string[]},
  *   outDir: string, keep: 'latest'|number }} Config */
 /** @typedef {{ perf:number|null, a11y:number|null, bp:number|null, seo:number|null, agentic:{pass:number,total:number}|null }} Scores */
 /** @typedef {{ fcp:number|null, lcp:number|null, tbt:number|null, cls:number|null, si:number|null }} Metrics */
@@ -17,7 +20,9 @@
  *   git:{commit:string, dirty:boolean}|null, buildFingerprint:string|null }} RoundMeta */
 /** @typedef {{ url?:string, selector?:string, snippet?:string, label?:string, ms?:number, bytes?:number, source?:{file:string, share:number}|null }} Evidence */
 /** @typedef {{ id:string, category:string, group:string, title:string, advice:string, score:number, savings:{lcp:number,tbt:number,fcp:number,cls:number,bytes:number}, impact:number, evidence:Evidence[] }} Finding */
-/** @typedef {Finding & { pages:string[], impactTotal:number, perPage:{page:string, impact:number, evidence:Evidence[]}[], ai:{cause:string, fix:string, model:string}|null }} MergedFinding */
+/** 新字段可选以兼容历史建议。 */
+/** @typedef {{cause:string, fix:string, model:string, confidence?:'high'|'medium'|'low', evidence?:{file:string,quote:string}[], verification?:string[], carried?:boolean}} AiAdvice */
+/** @typedef {Finding & { pages:string[], impactTotal:number, perPage:{page:string, impact:number, evidence:Evidence[]}[], ai:AiAdvice|null }} MergedFinding */
 /** @typedef {{ lcpElement:{selector:string, snippet:string}|null, lcpPhases:{phase:string, ms:number}[], topScripts:{url:string, ms:number, source:{file:string,share:number}|null}[] }} PageFacts */
 /** aiSent：真正发送给 AI 的内容；aiPlanned：--ai-dry-run 时本会发送的内容（不进文档）。 */
 /** @typedef {{ round:RoundMeta, pages:PageSummary[], findings:MergedFinding[], facts:Record<string,PageFacts>, aiSent:{finding:string, file:string, chars:number}[], aiPlanned?:{finding:string, file:string, chars:number}[] }} Analysis */

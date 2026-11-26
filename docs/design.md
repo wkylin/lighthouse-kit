@@ -42,10 +42,12 @@
 ## 做法
 
 1. **独立的 Node 命令行工具（选定）。** 单独的目录与 git 仓库 `lighthouse-kit`，命令名 `lhkit`；项目通过 npm 安装或本地 link 使用，配置文件放在项目根目录。纯 Node 实现（扫描、HTML 报告、HTTP/2 代理、统计都在其中），任何前端项目只要有 Node 就能用。规则分析内置，AI 可选。代价：要维护版本，项目要安装或更新它。
-2. **Claude Code 插件或 skill。** AI 由会话里的 Claude 完成，不需要单独的 Key；但只能在 Claude Code 里用，没装的同事用不了，也不便无人值守。
+2. **助手 skill。** 由 Codex、Claude Code 或其他宿主的当前模型完成分析，无需为 CLI 另配 Key；需要助手会话及文件/终端能力。
 3. **把原有脚本改成通用版，按需复制到项目里。** 免安装；但每个项目一份副本，改动要手动同步，很快会不一致。
 
 选 1：最符合"换项目也能用、默认不靠 AI"，AI 只是叠加的一层。
+
+在 CLI 基础上也提供通用 Agent Skills 入口：通过同一套任务导出、回答校验和报告回写复用助手当前模型，见 [多模型与 skill 设计](superpowers/specs/2026-11-26-multi-model-ai-design.md)。
 
 ## 已确定的设计
 
@@ -57,7 +59,11 @@
 
 ### 配置文件
 
-项目根目录 `lhkit.config.mjs`（`lhkit init` 生成模板），示意：
+默认在当前工作目录依次查找 `lhkit.config.mjs`、`lhkit.config.js`（`lhkit init` 生成 `.mjs` 模板），通常放在项目根目录。
+
+所有命令都接受 `--config <目录>`，例如 `lhkit run --config ./apps/web`。参数是配置所在目录，不是配置文件路径；支持绝对路径，或相对于当前工作目录的路径。该目录作为项目根目录，用于执行构建和服务命令、解析配置中的相对路径，并默认将结果写入其中的 `.lhkit/`。`lhkit init --config ./apps/web` 在指定目录生成模板，目录需已存在。
+
+配置示意：
 
 ```js
 export default {
@@ -76,7 +82,7 @@ export default {
   categories: ['performance', 'accessibility', 'best-practices', 'seo', 'agentic-browsing'],
   sourceMap: { manifest: 'dist/.vite/manifest.json', maps: 'dist' },
   docs: { audiences: ['dev', 'lead'], lang: 'zh-CN' },
-  ai: { enabled: false, model: 'claude-opus-5-5', apiKeyEnv: 'ANTHROPIC_API_KEY', sourceRoot: 'src', maxFindings: 10 },
+  ai: { enabled: false, provider: 'anthropic', sourceRoot: 'src', maxFindings: 10 },
   outDir: '.lhkit',
   keep: 'latest',                                  // 或保留最近 N 轮
 }
@@ -93,6 +99,8 @@ export default {
 | `lhkit analyze [结果目录]` | 对已有结果重新分析、重新生成文档（不重扫） |
 | `lhkit preview [结果目录]` | 在默认浏览器打开总览 |
 | `lhkit compare <A> <B>` | 两个轮次（按名称或目录）逐页对比分数和指标，输出 Markdown 和 HTML；噪声靠每轮 `runs: N` 的中位数处理 |
+| `lhkit ai-export [轮次]` | 导出助手当前会话可分析的任务、证据和允许的源码片段，不调用模型 API |
+| `lhkit ai-import <回答文件> [轮次]` | 校验并写回会话建议，重建文档和总览，不重扫、不调用 API |
 
 服务由工具启动的，结束时由工具关闭；端口已被占用时报错说明，不去复用未知进程。
 
@@ -130,10 +138,12 @@ export default {
 
 ### AI 分析（可选）
 
-- 仅在 `ai.enabled` 且对应环境变量里有 Key 时运行；否则静默跳过，文档照常生成。
+- CLI API 分析在 `ai.enabled` 时运行，支持 Anthropic、OpenAI、DeepSeek 和 OpenAI 兼容服务。默认模型与接口地址可覆盖，Key 从环境变量读取；缺 Key 时提示并使用规则建议，缓存命中无需发请求。
 - 只发送 `ai.sourceRoot` 之下、由源码映射命中的文件片段；内置排除名单（`.env*`、密钥与证书文件、`node_modules`、锁文件、构建产物）并可在配置里追加。
 - 在配置里打开 AI 即视为同意发送：运行时不逐次确认，一条命令可无人值守跑完。另提供 `--ai-dry-run`：照常分析，列出本会发送的文件和字符数，但不发送、不调用 AI。（已与需求方确认）
-- 对排名前 `maxFindings` 的发现，把发现本身、证据和对应源码片段（截断到上限）发给 Claude，要求返回原因和具体改法；结果写进开发版对应条目，标注"AI 建议"，规则建议保留在旁边。
+- 对排名靠前且有允许源码的最多 `maxFindings` 条发现，把证据和片段交给所选模型，要求返回原因、改法、证据充分程度、源码引用和验证步骤。文件和引用必须匹配实际提供的片段，没有引用只能标为低置信度。规则建议保留在旁边；历史建议可沿用并标注本次未重新核验。
+- 源码字符预算、回答 token、超时、有限重试、并发、缓存、语言与额外业务约束均可配置。默认并发 2，按请求、证据和源码内容匹配缓存；API 与 skill 共用源码筛选器及回答校验器。
+- `skills/lighthouse-kit/SKILL.md` 定义模型中立的会话流程。`ai-export` 无需 Key 或打开 API；`ai-import` 整批校验轮次、请求 ID、源码是否变化及引用后才写回报告，错误时原文件不变。配置和完整用法见 README 的 AI 分析一节。
 - 发送内容在文档末尾列出（哪些文件、多少字符），便于审查。失败或超时回退为规则建议，不影响其余流程。
 
 ### 文档

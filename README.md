@@ -48,7 +48,7 @@ pnpm add -D link:/path/to/lighthouse-kit
 
 ## 配置
 
-项目根目录放 `lhkit.config.mjs`（`lhkit init` 可生成模板）：
+默认在当前工作目录依次查找 `lhkit.config.mjs`、`lhkit.config.js`（`lhkit init` 可生成 `.mjs` 模板）。通常在项目根目录运行，配置示例：
 
 ```js
 /** @type {import('lighthouse-kit').UserConfig} */
@@ -73,6 +73,16 @@ import { defineConfig } from 'lighthouse-kit'
 export default defineConfig({ serve: { static: 'dist' }, pages: ['/'] })
 ```
 
+从其他目录运行时，用 `--config <目录>` 指定配置所在的项目目录：
+
+```bash
+npx lhkit init --config ./apps/web       # 在已有的 apps/web 目录生成配置模板
+npx lhkit run --config ./apps/web        # 使用 apps/web 中的配置跑全流程
+npx lhkit scan /about --config /path/to/your-project
+```
+
+所有命令都支持 `--config`，参数是**目录，不是配置文件路径**。目录可用绝对路径，也可用相对于当前工作目录的路径。指定后，工具在该目录查找配置，并以它作为项目根目录：构建和服务命令在此执行，配置中的相对路径（如 `serve.static`、`sourceMap.maps`、`ai.sourceRoot`、`outDir`）也以此为基准，默认结果输出到该目录的 `.lhkit/`。
+
 全部字段和说明见 [types/index.d.ts](types/index.d.ts)，设计细节见 [docs/design.md](docs/design.md) 的“配置文件”一节。几点说明：
 
 - 字段类型不对（端口、次数、超时、`categories` 等）直接报配置错误，不会悄悄改成别的值。
@@ -93,8 +103,10 @@ export default defineConfig({ serve: { static: 'dist' }, pages: ['/'] })
 | `lhkit analyze [轮次]` | 对已有轮次重新分析、出文档 |
 | `lhkit preview [轮次]` | 打开总览 |
 | `lhkit compare <A> <B>` | 对比两个轮次 |
+| `lhkit ai-export [轮次]` | 导出供当前助手分析的证据和源码任务，不调用模型 API |
+| `lhkit ai-import <回答文件> [轮次]` | 校验助手建议并写回报告，不重扫、不调用模型 API |
 
-常用参数：`--runs N`（每页次数，取中位数）、`--name X`（命名轮次，不会被自动清理）、`--url U`（临时改扫外部地址）、`--ai-dry-run`（只列出 AI 会发送的内容，不发送）。
+常用参数：`--config DIR`（指定配置所在目录，所有命令均支持）、`--runs N`（每页次数，取中位数）、`--name X`（命名轮次，不会被自动清理）、`--url U`（临时改扫外部地址）、`--ai-dry-run`（只列出 AI 会发送的内容，不发送）。
 
 - 参数只能用在支持它的命令上（例如 `compare` 不接受 `--runs`），用错了按配置错误退出。
 - Chrome、构建目录和端口在开始前就检查。缺了或被占用时直接报错，不会先跑一遍构建。
@@ -123,7 +135,96 @@ lhkit compare base new
 
 ## 可选：AI 分析
 
-配置 `ai: { enabled: true, sourceRoot: 'src' }` 并设置环境变量 `ANTHROPIC_API_KEY`。工具会把排名靠前、能对到源码的问题（默认 10 条）连同源码片段（每个文件最多 8000 字符，每条问题最多 24000 字符）发给 Claude（默认 `claude-opus-5-5`），把原因和改法写进开发版文档，并在文档末尾列出发送了哪些文件。以下文件永远不发送：`.env*`、`.npmrc`/`.netrc` 等凭据文件、私钥与证书（`.pem`、`.key`、`id_rsa` 等）、`node_modules`、锁文件、构建产物（source map 目录、静态目录）。指向源码目录之外的软链接不跟随。可用 `ai.exclude` 追加排除规则。先看会发什么：`lhkit scan --ai-dry-run`。没有 Key 或调用失败时自动使用规则建议。
+可以让 CLI 调用模型 API，也可以通过通用 skill 复用 Codex、Claude Code 等助手当前会话的模型。两种方式共用源码筛选和建议校验，建议写入已有开发版报告，负责人版指标仍来自真实 Lighthouse 扫描。
+
+### 通过模型 API 自动分析
+
+在 `lhkit.config.mjs` 中只需开启 AI、选择服务商：
+
+```js
+ai: { enabled: true, provider: 'deepseek' },
+```
+
+然后设置对应环境变量并照常运行 `lhkit run` 或 `lhkit scan`。不写 `provider` 时保持原有 Anthropic 行为。
+
+| `provider` | 默认模型 | 默认 Key 环境变量 | 默认 API 根地址 |
+|---|---|---|---|
+| `anthropic` | `claude-opus-5-5` | `ANTHROPIC_API_KEY` | Anthropic SDK 默认地址 |
+| `openai` | `gpt-4.1-mini` | `OPENAI_API_KEY` | `https://api.openai.com/v1` |
+| `deepseek` | `deepseek-flash` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com` |
+| `openai-compatible` | 必须指定 `model` | `OPENAI_API_KEY` | 必须指定 `baseURL` |
+
+模型名可以通过 `model` 自定义。OpenAI 与 DeepSeek 使用 Chat Completions 接口；Codex 是助手入口，通过下方 skill 使用当前会话。接口格式参考 [OpenAI](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) 和 [DeepSeek](https://api-docs.deepseek.com/)。
+
+常用配置按需增加：
+
+```js
+ai: {
+  enabled: true,
+  provider: 'openai-compatible',
+  baseURL: 'https://gateway.example.com/v1',
+  model: 'your-model',
+  apiKeyEnv: 'LHKIT_API_KEY',
+  sourceRoot: 'src',
+  exclude: ['**/private/**'],
+  maxFindings: 10,
+  instructions: '保持 SSR 和现有交互，优先改善首屏性能。',
+},
+```
+
+进阶选项都有默认值：
+
+| 选项 | 默认值 | 用途 |
+|---|---|---|
+| `responseFormat` | `auto` | Anthropic/OpenAI 使用 JSON schema，DeepSeek/兼容服务使用 JSON；也可设 `json-schema`、`json` 或 `text`。`text` 不传格式参数，仍要求并校验 JSON 回答 |
+| `maxFileChars` / `maxFindingChars` | `8000` / `24000` | 每文件/每问题的源码字符预算；前者不能大于后者，长文件可适当调大 |
+| `concurrency` | `2` | 同时分析的问题数，范围 1–8；设为 1 可顺序分析 |
+| `cache` | `true` | 有效建议缓存到 `<outDir>/ai-cache/`；模型、提示、证据或源码变化后失效；设为 `false` 强制重新请求 |
+| `timeoutMs` | `120000` | 每次请求的超时毫秒数，覆盖连接、响应头及完整正文 |
+| `maxRetries` | `1` | 临时网络错误、限流、服务端错误的重试次数，范围 0–3；鉴权错误不重试 |
+| `maxTokens` | `16000` | 回答 token 上限，推理模型也可能用于推理 token |
+| `language` | `zh-CN` | AI 建议的回答语言；报告固定栏目仍为中文 |
+
+`baseURL` 保留 `/v1` 等路径前缀，不能包含账户密码、查询参数或 fragment。兼容服务需要 Key 时设置 `apiKeyEnv` 对应环境变量；不鉴权的本地服务也需设置一个非空占位 Key。网关不支持格式参数时可设 `responseFormat: 'text'`。Anthropic 的 `json` / `text` 通过提示要求 JSON，不使用 schema 约束。
+
+Anthropic 也兼容原有 `ANTHROPIC_BASE_URL` 环境变量，显式 `baseURL` 配置优先；实际网关地址参与缓存匹配，切换地址后不会复用另一网关的建议。
+
+每条新建议包含原因、改法、证据充分程度、源码引用和验证步骤。引用必须逐字存在于本次提供的源码中；不存在的文件、引用或不完整回答会被拒收，保留规则建议。证据不足时标为低置信度并列出待确认项。引用校验不代替运行验证，优化效果应按建议的方法复测。重新分析未拿到新建议时保留历史建议，并标注“本次未重新核验”。
+
+只处理排名靠前、能关联到源码的问题（默认最多 10 条）。以下文件始终排除：`.env*`、`.npmrc`/`.netrc` 等凭据、私钥与证书、`node_modules`、锁文件、构建产物及结果目录。符号链接的实际目标也检查源码范围和排除规则。用 `ai.exclude` 追加排除规则；相对 glob 以项目根目录为基准，绝对 glob 按绝对路径匹配。先看会发送哪些片段：`lhkit scan --ai-dry-run`，此时不请求 API、不写缓存。没有 Key、请求失败或建议无效时使用规则建议；鉴权或连接故障在重试上限后停止后续调度，已在途的请求可正常结束。
+
+### 通过通用 skill 使用当前助手
+
+仓库和 npm 包都包含 [skills/lighthouse-kit/SKILL.md](skills/lighthouse-kit/SKILL.md)，遵循 [Agent Skills 规范](https://agentskills.io/specification)。复制到目标项目中即可使用，不需要为 CLI 另配模型 API Key：
+
+```bash
+# 已在目标项目安装含有 ai-export / ai-import 的 lighthouse-kit 版本后
+# Codex（项目级）
+mkdir -p .agents/skills
+cp -R node_modules/lighthouse-kit/skills/lighthouse-kit .agents/skills/
+
+# Claude Code（项目级）
+mkdir -p .claude/skills
+cp -R node_modules/lighthouse-kit/skills/lighthouse-kit .claude/skills/
+```
+
+本地 link 开发时，也可从本仓库的 `skills/lighthouse-kit` 复制。个人目录分别为 `~/.agents/skills/` 和 `~/.claude/skills/`，见 [Codex 发现规则](https://developers.openai.com/codex/skills/) 和 [Claude Code 安装位置](https://code.claude.com/docs/en/skills)。
+
+Codex 输入“用 `$lighthouse-kit` 分析这个项目”，Claude Code 输入 `/lighthouse-kit`。以 DeepSeek 为后端、支持 Agent Skills 且能读写文件和运行命令的宿主，可加载同一份 skill。只有聊天界面时，需要手动导出任务、保存模型回答后再导入。
+
+也可以手动运行完整流程：
+
+```bash
+# 会话分析模式：保证不额外调用配置中的模型 API
+LHKIT_NO_OPEN=1 lhkit run --name review --ai-dry-run --config ./apps/web
+lhkit ai-export review --config ./apps/web
+# 让助手读取输出指向的 ai/request.json，按 skill 中的格式生成回答 JSON
+lhkit ai-import ./reply.json review --config ./apps/web
+```
+
+已有扫描结果时直接 `ai-export` 即可，省略轮次时选最近一轮已结束的结果。`ai-export` 无需打开 `ai.enabled`；导出本身不记作已发送。回答需带本次导出的 `requestId`、`roundId`、实际模型名或会话标签，以及带引用和验证步骤的 `findings`。完整格式见 skill。
+
+`ai-import` 支持只回答部分任务，重复导入不重复累计源码记录。同一轮次的导入串行执行，先生成完整产物再替换，替换失败时回滚。整批校验通过后才更新该轮分析和报告，不调用 API、不重扫、不新增轮次或历史；校验失败退出码为 2，原分析与文档不变。导出后源码或分析配置变化时需重新导出。回答文件相对执行命令时的工作目录解析，与 `--config` 分开。
 
 ## 发布到 npm（维护者）
 
@@ -134,4 +235,4 @@ npm publish                    # 发布前会自动跑单元测试（prepublishO
 git push --follow-tags
 ```
 
-发布的包只含 `bin/`、`src/`、`types/`、README 和 LICENSE（见 `package.json` 的 `files`）。发布前可用 `npm pack --dry-run` 查看内容。
+发布的包只含 `bin/`、`src/`、`types/`、`skills/`、README 和 LICENSE（见 `package.json` 的 `files`）。发布前可用 `npm pack --dry-run` 查看内容。

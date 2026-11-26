@@ -21,6 +21,8 @@ export const HELP = `lhkit ${pkg.version} — 本地 Lighthouse 扫描、报告�
   analyze [轮次] [--ai-dry-run]           对已有轮次重新分析、重新生成文档
   preview [轮次]                          在浏览器打开总览
   compare <A> <B>                        对比两个轮次
+  ai-export [轮次]                       导出当前助手可分析的证据与源码任务，不调用 API
+  ai-import <回答文件> [轮次]             校验并写回助手建议，重新生成报告，不调用 API
 
 通用参数：
   --config <dir>                         指定配置目录（默认当前目录）

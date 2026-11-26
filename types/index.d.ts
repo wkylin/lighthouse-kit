@@ -56,13 +56,39 @@ export interface BeforePageContext {
   warmup: boolean
 }
 
+export type AiProvider = 'anthropic' | 'openai' | 'deepseek' | 'openai-compatible'
+
 export interface AiConfig {
-  /** 打开后需要环境变量（默认 ANTHROPIC_API_KEY）。打开即同意把排名靠前问题的源码片段发给 Claude。 */
+  /** 默认关闭。打开即允许把筛选后的证据和源码片段发给所选模型服务；Key 从环境变量读取。 */
   enabled?: boolean
-  /** 默认 `claude-opus-5-5`。 */
+  /** 默认 anthropic。Codex 等助手通过通用 skill 复用当前会话。 */
+  provider?: AiProvider
+  /** 默认：Anthropic claude-opus-5-5，OpenAI gpt-4.1-mini，DeepSeek deepseek-flash。兼容服务必须指定。 */
   model?: string
-  /** 读取 API Key 的环境变量名，默认 `ANTHROPIC_API_KEY`。 */
+  /** API 根地址（保留 /v1 等路径前缀）；openai-compatible 必须指定。 */
+  baseURL?: string
+  /** 默认按 provider 读取 ANTHROPIC_API_KEY、OPENAI_API_KEY 或 DEEPSEEK_API_KEY。 */
   apiKeyEnv?: string
+  /** 默认 auto：Anthropic/OpenAI 用 schema，DeepSeek/兼容服务用 JSON。text 仍要求 JSON 回答。 */
+  responseFormat?: 'auto' | 'json-schema' | 'json' | 'text'
+  /** 每次请求超时，默认 120000 毫秒。 */
+  timeoutMs?: number
+  /** 临时失败的重试次数，0–3，默认 1。 */
+  maxRetries?: number
+  /** 回答 token 上限，默认 16000（推理模型也包含推理 token）。 */
+  maxTokens?: number
+  /** 同时分析的问题数，1–8，默认 2。 */
+  concurrency?: number
+  /** 按模型、提示和源码内容缓存有效建议，默认 true；false 强制重新请求。 */
+  cache?: boolean
+  /** 每文件源码字符预算，默认 8000，不能大于 maxFindingChars。 */
+  maxFileChars?: number
+  /** 每问题源码字符预算，默认 24000。 */
+  maxFindingChars?: number
+  /** AI 回答语言，默认 zh-CN。 */
+  language?: string
+  /** 额外业务约束，例如“保持 SSR，优先兼容旧设备”；不替代证据和验证要求。 */
+  instructions?: string
   /** 允许发送的源码目录。默认：项目有 `src/` 就用 `src/`，否则项目根目录。 */
   sourceRoot?: string
   /** 最多分析的问题数，默认 10。 */

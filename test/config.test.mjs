@@ -7,6 +7,43 @@ import { ConfigError, loadConfig, normalizeConfig } from '../src/config.mjs'
 
 const norm = (raw, overrides) => normalizeConfig(raw, '/p', '/p/lhkit.config.mjs', overrides)
 
+test('AI providers supply defaults while advanced controls can be overridden', () => {
+  const base = { serve: { url: 'https://x.test' }, pages: ['/'] }
+  for (const [provider, model, apiKeyEnv, baseURL] of [
+    ['anthropic', 'claude-opus-5-5', 'ANTHROPIC_API_KEY', null],
+    ['openai', 'gpt-4.1-mini', 'OPENAI_API_KEY', 'https://api.openai.com/v1'],
+    ['deepseek', 'deepseek-flash', 'DEEPSEEK_API_KEY', 'https://api.deepseek.com'],
+  ]) {
+    const ai = norm({ ...base, ai: { provider } }).ai
+    assert.equal(ai.provider, provider)
+    assert.equal(ai.model, model)
+    assert.equal(ai.apiKeyEnv, apiKeyEnv)
+    assert.equal(ai.baseURL, baseURL)
+    assert.equal(ai.concurrency, 2)
+    assert.equal(ai.cache, true)
+    assert.equal(ai.maxRetries, 1)
+    assert.equal(ai.timeoutMs, 120000)
+  }
+  const ai = norm({ ...base, ai: { provider: 'openai-compatible', model: 'local-model', baseURL: 'http://localhost:8080/api/v1/', apiKeyEnv: 'MY_KEY',
+    responseFormat: 'text', maxFileChars: 500, maxFindingChars: 1500, maxTokens: 2048, concurrency: 1, cache: false,
+    timeoutMs: 5000, maxRetries: 0, language: 'en', instructions: 'Keep server-side rendering.' } }).ai
+  assert.equal(ai.baseURL, 'http://localhost:8080/api/v1')
+  assert.equal(ai.responseFormat, 'text')
+  assert.equal(ai.maxFileChars, 500)
+  assert.equal(ai.cache, false)
+  assert.equal(ai.instructions, 'Keep server-side rendering.')
+})
+
+test('invalid AI controls are rejected before making a request', () => {
+  for (const ai of [
+    { provider: 'codex' }, { provider: 'openai-compatible' }, { provider: 'openai-compatible', model: 'm' },
+    { baseURL: 'file:///tmp/model' }, { baseURL: 'https://user:pass@example.com' }, { baseURL: 'https://example.com?key=secret' },
+    { baseURL: 'https://example.com#frag' }, { enabled: 'yes' }, { cache: 'false' }, { timeoutMs: 0 }, { maxTokens: 0 },
+    { concurrency: 9 }, { concurrency: 1.5 }, { maxRetries: 4 }, { maxRetries: -1 }, { responseFormat: 'xml' },
+    { maxFileChars: 0 }, { maxFileChars: 100, maxFindingChars: 50 }, { instructions: 42 }, { language: '' }, { model: '   ' },
+  ]) assert.throws(() => norm({ serve: { url: 'https://x.test' }, pages: ['/'], ai }), ConfigError, JSON.stringify(ai))
+})
+
 test('defaults', () => {
   const c = norm({ serve: { url: 'https://example.com' }, pages: ['/'] })
   assert.equal(c.serve.mode, 'url')

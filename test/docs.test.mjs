@@ -122,6 +122,15 @@ test('multi-line AI advice keeps its lines and code blocks', () => {
   assert.ok(md.includes('> ```js') && md.includes('> const a = 1'))
 })
 
+test('AI reports include source quotations, verification, and the status of carried advice', () => {
+  const a = structuredClone(analysis)
+  a.findings[0].ai = { cause: '静态推断', fix: '先确认调用路径', model: 'session', confidence: 'medium',
+    evidence: [{ file: 'src/example.vue', quote: 'const rows = items.map(render)' }], verification: ['同一配置复测，并检查键盘交互'], carried: true }
+  const md = renderDevDoc(a)
+  for (const content of ['src/example.vue', 'const rows = items.map(render)', '同一配置复测，并检查键盘交互', '本次未重新核验', '不代表模型正确率'])
+    assert.ok(md.includes(content), content)
+})
+
 test('a bundle that could not be mapped to source is called out', () => {
   const md = renderDevDoc(analysis)
   assert.ok(md.includes('未对到源码'), 'the note explains the empty 源文件 cell')
