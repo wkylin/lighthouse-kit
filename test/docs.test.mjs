@@ -145,3 +145,101 @@ test('a page whose load timed out is flagged as possibly incomplete', () => {
   const lead = renderLeadDoc(a, { baseline: null, trend: [] })
   assert.ok(lead.split('\n').some((l) => l.startsWith('| /m/home') && l.includes('结果可能不完整')))
 })
+
+function memoryAnalysis() {
+  const a = structuredClone(analysis)
+  const mib = 1024 ** 2
+  const memory = (heap, peak, duration, samples, detached) => ({
+    heapSnapshot: { usedJsHeapSize: heap * mib, totalJsHeapSize: 200 * mib, jsHeapSizeLimit: 400 * mib },
+    allocationTimeline: { baselineMemory: 100 * mib, peakMemory: peak * mib, duration },
+    allocationSampling: { samplingInterval: 32768, duration, sampleCount: samples, totalAllocatedBytes: samples * 32768 },
+    detachedElements: { detachedCount: detached, detachedMemory: null },
+  })
+  const run = a.pages[0].runs[0]
+  a.pages[0].runs = [
+    { ...run, index: 1, memory: memory(120, 120, 1000, 100, 10) },
+    { ...run, index: 2, memory: null },
+    { ...run, index: 3, memory: memory(160, 160, 3000, 300, 14) },
+    { ...run, index: 4, ok: false, memory: memory(999, 999, 1000, 999, 999) },
+  ]
+  const finding = {
+    id: 'memory-high-heap', title: 'JavaScript 堆占用较高', category: 'memory', group: 'memory', advice: '检查长期保留的对象。',
+    score: 0, impact: 0, impactTotal: 0, savings: { lcp: 0, tbt: 0, fcp: 0, cls: 0, bytes: 0 },
+    evidence: [{ label: '已用堆中位数 140 MiB，阈值 100 MiB', bytes: 140 * mib }],
+    pages: ['/m/home'], perPage: [{ page: '/m/home', impact: 0, evidence: [] }], ai: null,
+  }
+  a.findings.push(finding)
+  return a
+}
+
+test('both reports show memory medians, per-run rates, coverage and unknown values', () => {
+  const a = memoryAnalysis()
+  for (const md of [renderDevDoc(a), renderLeadDoc(a, { baseline: null, trend: [] })]) {
+    assert.ok(md.includes('## 内存概况'))
+    const row = md.split('\n').find((line) => line.startsWith('| /m/home | 2/3 |'))
+    assert.equal(row, '| /m/home | 2/3 | 140 MiB | 35% | 20 MiB/s | 100 样本/s | 12 |')
+    assert.ok(md.includes('| /m/me/about-us | 0 | – | – | – | – | – |'), 'missing memory stays unknown')
+    assert.ok(md.includes('各项可用次数可能不同'))
+    assert.ok(!/NaN|Infinity|undefined/.test(md))
+  }
+})
+
+test('developer memory findings link raw successful runs and use an explicit memory rule label', () => {
+  const md = renderDevDoc(memoryAnalysis())
+  const section = md.slice(md.indexOf('JavaScript 堆占用较高')).split('\n### ')[0]
+  assert.ok(section.includes('内存规则：`memory-high-heap`'))
+  assert.ok(section.includes('已用堆中位数 140 MiB，阈值 100 MiB'))
+  assert.ok(section.includes('../pages/m/home/run-1/memory.json'))
+  assert.ok(section.includes('../pages/m/home/run-3/memory.json'))
+  assert.ok(!section.includes('run-2/memory.json') && !section.includes('run-4/memory.json'))
+  assert.ok(!section.includes('审计项：') && !section.includes('lighthouse.html'))
+})
+
+test('lead memory findings name the affected pages without score impact or raw data links', () => {
+  const md = renderLeadDoc(memoryAnalysis(), { baseline: null, trend: [] })
+  assert.ok(md.includes('内存发现：1 类，涉及 1 个页面。'))
+  assert.ok(md.includes('- JavaScript 堆占用较高：/m/home'))
+  assert.ok(md.split('\n').some((line) => /^\| 内存[^|]* \| 1 \| 1 \| – \|$/.test(line)))
+  assert.ok(!md.includes('memory.json'))
+})
+
+test('legacy rounds omit the memory section without claiming successful collection', () => {
+  assert.ok(!renderDevDoc(analysis).includes('## 内存概况'))
+  assert.ok(!renderLeadDoc(analysis, { baseline: null, trend: [] }).includes('## 内存概况'))
+})
+
+test('both reports distinguish unsuccessful memory collection from a legacy round', () => {
+  const a = structuredClone(analysis)
+  a.pages[0].runs[0].memory = { heapSnapshot: null, allocationTimeline: null, allocationSampling: null, detachedElements: null }
+  a.pages[0].memory = null
+  a.pages[0].median.memory = null
+  for (const md of [renderDevDoc(a), renderLeadDoc(a, { baseline: null, trend: [] })]) {
+    assert.ok(md.includes('## 内存概况'))
+    assert.ok(md.includes('本轮内存采集未获得有效数据，无法判断是否存在内存问题'))
+    assert.ok(md.includes('| /m/home | 0 | – | – | – | – | – |'))
+    assert.ok(!md.includes('已采集数据未触发内存规则'))
+  }
+})
+
+test('legacy representative memory still has a raw evidence link', () => {
+  const a = memoryAnalysis()
+  a.pages[0].memory = a.pages[0].runs[0].memory
+  const { memory: _memory, ...legacyRun } = a.pages[0].runs[0]
+  a.pages[0].runs = [legacyRun]
+  const md = renderDevDoc(a)
+  assert.ok(md.includes('../pages/m/home/run-1/memory.json'))
+  assert.ok(md.includes('| /m/home | 1/1 | 120 MiB |'))
+})
+
+test('memory findings and tables are included in both generated HTML reports', async () => {
+  const dir = await makeRound()
+  await writeDocs(dir, memoryAnalysis(), { ...config, docs: { audiences: ['dev', 'lead'], lang: 'zh-CN' } }, { baseline: null, trend: [] })
+  const dev = await fs.readFile(path.join(dir, 'docs/dev.html'), 'utf8')
+  const lead = await fs.readFile(path.join(dir, 'docs/lead.html'), 'utf8')
+  for (const html of [dev, lead]) {
+    assert.ok(html.includes('内存概况'))
+    assert.ok(html.includes('140 MiB'))
+    assert.ok(html.includes('JavaScript 堆占用较高'))
+  }
+  assert.ok(dev.includes('href="../pages/m/home/run-3/memory.json"'))
+})

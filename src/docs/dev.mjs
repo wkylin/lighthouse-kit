@@ -1,5 +1,6 @@
 // 开发版文档：问题清单（证据、源码位置、建议），以及各页面要点。
 import { CATEGORY_LABELS } from '../analyze/rules.mjs'
+import { memoryEvidenceLinks, memorySection } from './memory.mjs'
 import { PHASE_LABELS, VISIT_LABELS, cell, fmtAgentic, fmtCls, fmtKb, fmtMs, fmtS, fmtScore, fmtTime, isLoadTimeout, loadTimedOut, redirectMark, redirectedTo, reportPath, shortUrl } from './format.mjs'
 
 const link = (summary, text) => `[${text}](../${reportPath(summary)})`
@@ -87,14 +88,20 @@ function findingsSection(a, lines) {
     lines.push('没有未通过的审计项。', '')
     return
   }
-  lines.push('按优先级排列：性能问题按“估算影响 × 涉及页面”排序，其后是无障碍、最佳实践、SEO 与 Agentic Browsing 未通过的项。', '')
+  lines.push('按优先级排列：性能问题按“估算影响 × 涉及页面”排序；内存发现按涉及页面数排序，其后是无障碍、最佳实践、SEO 与 Agentic Browsing 未通过的项。', '')
   a.findings.forEach((f, i) => {
     lines.push(`### ${i + 1}. ${f.title}`, '')
     lines.push(`- 类别：${CATEGORY_LABELS[f.category] ?? f.category} · 涉及 ${f.pages.length} 个页面：${f.pages.join('、')}`)
     const saving = savingsLine(f.savings)
     if (saving) lines.push(`- 估算收益（影响最大的页面）：${saving}`)
-    lines.push(`- 报告：${f.pages.map((p) => (byPage.get(p)?.representative ? link(byPage.get(p), p) : p)).join('、')}`)
-    lines.push(`- 审计项：\`${f.id}\``, '')
+    if (f.group === 'memory') {
+      const raw = f.pages.flatMap((p) => memoryEvidenceLinks(byPage.get(p)))
+      lines.push(`- 原始内存数据：${raw.length ? raw.join('、') : '无逐次采集记录，使用页面汇总数据'}`)
+      lines.push(`- 内存规则：\`${f.id}\`（工具启发式，不计入 Lighthouse 估算收益）`, '')
+    } else {
+      lines.push(`- 报告：${f.pages.map((p) => (byPage.get(p)?.representative ? link(byPage.get(p), p) : p)).join('、')}`)
+      lines.push(`- 审计项：\`${f.id}\``, '')
+    }
     evidenceTable(f, a.round.origin, lines)
     lines.push(`**建议**：${f.advice}`, '')
     if (f.ai) {
@@ -166,6 +173,7 @@ function aiAppendix(a, lines) {
 export function renderDevDoc(analysis) {
   const lines = ['# 性能问题清单（开发版）', '']
   overview(analysis, lines)
+  memorySection(analysis, lines)
   findingsSection(analysis, lines)
   pagesSection(analysis, lines)
   aiAppendix(analysis, lines)

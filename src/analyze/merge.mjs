@@ -39,7 +39,10 @@ export function mergeFindings(perPage) {
     .filter((m) => m.group === 'performance')
     .sort((a, b) => b.impactTotal - a.impactTotal || b.savings.bytes - a.savings.bytes || b.pages.length - a.pages.length || a.id.localeCompare(b.id))
   const rest = merged
-    .filter((m) => m.group !== 'performance')
+    .filter((m) => m.group !== 'performance' && m.group !== 'memory')
     .sort((a, b) => b.pages.length - a.pages.length || a.id.localeCompare(b.id))
-  return [...perf, ...rest]
+  const memory = merged
+    .filter((m) => m.group === 'memory')
+    .sort((a, b) => b.pages.length - a.pages.length || a.id.localeCompare(b.id))
+  return [...perf, ...memory, ...rest]
 }

@@ -10,6 +10,8 @@ import { findChrome } from './chrome.mjs'
 import { loadTimedOut } from './docs/format.mjs'
 import { writeLighthouseHtml } from './report/lighthouse-html.mjs'
 import { pageSlug, writeRoundMeta } from './round.mjs'
+import { collectMemoryMetrics } from './memory.mjs'
+import { aggregateMemory } from './memory-summary.mjs'
 
 // Resolve through Lighthouse so this also works with unhoisted dependencies.
 const lighthouseRequire = createRequire(import.meta.resolve('lighthouse'))
@@ -55,6 +57,10 @@ function representativeOf(okRuns) {
   return best.index
 }
 
+/**
+ * @param {{config: import('./types.mjs').Config, url: string, dir: string, signal?: AbortSignal, maxWaitForLoad?: number, chromePath?: string}} opts
+ * @returns {Promise<{lhr: import('lighthouse').LH.Result, memory: import('./types.mjs').MemoryMetrics|null}>}
+ */
 async function runOnce({ config, url, dir, signal, maxWaitForLoad, chromePath }) {
   const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lhkit-profile-'))
   let browser
@@ -139,11 +145,32 @@ async function runOnce({ config, url, dir, signal, maxWaitForLoad, chromePath })
       page,
     )
     if (!result) throw new Error('Lighthouse 没有返回结果')
+
+    // Lighthouse 完成后收集内存指标
+    let memory = null
+    try {
+      memory = await collectMemoryMetrics(page, {
+        captureHeap: true,
+        captureTimeline: true,
+        captureSampling: true,
+        captureDetached: true,
+      })
+    } catch (err) {
+      console.warn('内存收集失败，继续扫描:', err.message)
+    }
+
     await fs.mkdir(dir, { recursive: true })
     const jsonPath = path.join(dir, 'lighthouse.json')
     await fs.writeFile(jsonPath, result.report)
     writeLighthouseHtml(jsonPath, result.lhr)
-    return result.lhr
+
+    // 如果成功收集内存数据，保存到 memory.json
+    if (memory) {
+      const memoryPath = path.join(dir, 'memory.json')
+      await fs.writeFile(memoryPath, `${JSON.stringify(memory, null, 2)}\n`)
+    }
+
+    return { lhr: result.lhr, memory }
   } finally {
     signal?.removeEventListener('abort', onAbort)
     // Lighthouse 13.5 leaves parsed traces strongly held by this stack cache.
@@ -186,14 +213,14 @@ export async function scanRound({ config, origin, roundDir, meta, pages, log, si
       const maxRetries = 3
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          const lhr = await runOnce({ config, url, dir: path.join(roundDir, 'pages', slug, `run-${index}`), signal, maxWaitForLoad, chromePath })
+          const { lhr, memory } = await runOnce({ config, url, dir: path.join(roundDir, 'pages', slug, `run-${index}`), signal, maxWaitForLoad, chromePath })
           lighthouseVersion ||= lhr.lighthouseVersion
           if (lhr.runtimeError) {
             runs.push({ index, ok: false, error: `${lhr.runtimeError.code}：${lhr.runtimeError.message}`, scores: null, metrics: null, warnings: [] })
           } else {
             finalUrl = lhr.finalDisplayedUrl ?? lhr.finalUrl ?? url
             // runWarnings：例如加载超时（照常出分，但结果可能不完整）
-            runs.push({ index, ok: true, error: null, scores: scoresOf(lhr), metrics: metricsOf(lhr), warnings: [...(lhr.runWarnings ?? [])] })
+            runs.push({ index, ok: true, error: null, scores: scoresOf(lhr), metrics: metricsOf(lhr), memory, warnings: [...(lhr.runWarnings ?? [])] })
           }
           lastError = null
           break
@@ -231,6 +258,7 @@ export async function scanRound({ config, origin, roundDir, meta, pages, log, si
     const representative = representativeOf(okRuns)
     const rep = okRuns.find((r) => r.index === representative)
     const med = (pick) => median(okRuns.map(pick))
+    const memory = aggregateMemory(runs)
     /** @type {import('./types.mjs').PageSummary} */
     const summary = {
       page,
@@ -245,8 +273,10 @@ export async function scanRound({ config, origin, roundDir, meta, pages, log, si
         ? {
             scores: { perf: med((r) => r.scores.perf), a11y: med((r) => r.scores.a11y), bp: med((r) => r.scores.bp), seo: med((r) => r.scores.seo), agentic: rep.scores.agentic },
             metrics: { fcp: med((r) => r.metrics.fcp), lcp: med((r) => r.metrics.lcp), tbt: med((r) => r.metrics.tbt), cls: med((r) => r.metrics.cls), si: med((r) => r.metrics.si) },
+            memory,
           }
         : null,
+      memory,
     }
     await fs.mkdir(path.join(roundDir, 'pages', slug), { recursive: true })
     await fs.writeFile(path.join(roundDir, 'pages', slug, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)

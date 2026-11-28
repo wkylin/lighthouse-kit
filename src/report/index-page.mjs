@@ -1,7 +1,8 @@
 // 轮次总览 index.html：各页分数与指标，链接到每页报告和文档。
 import fs from 'node:fs'
 import path from 'node:path'
-import { PAGE_CSS } from '../docs/html.mjs'
+import { PAGE_CSS, markdownToHtmlFragment } from '../docs/html.mjs'
+import { memorySection } from '../docs/memory.mjs'
 import { VISIT_LABELS, fmtAgentic, fmtTime, median, redirectedTo, reportPath } from '../docs/format.mjs'
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
@@ -43,6 +44,9 @@ export function writeIndex(roundDir, analysis, audiences = ['dev', 'lead']) {
     audiences.includes('lead') ? '<a href="docs/lead.html">负责人版文档：性能概况</a>' : '',
   ].filter(Boolean)
   const title = `Lighthouse 扫描结果 · ${r.name ?? r.id}`
+  const memoryLines = []
+  memorySection(analysis, memoryLines, { findings: true, details: true, rawLinks: true, basePath: '.' })
+  const memoryHtml = markdownToHtmlFragment(memoryLines.join('\n'))
   const html = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
@@ -57,6 +61,8 @@ export function writeIndex(roundDir, analysis, audiences = ['dev', 'lead']) {
   .moved { font-size: 11px; opacity: 0.6; }
   tfoot td { font-weight: 700; border-top: 2px solid var(--line); border-bottom: 0; }
   .hint { margin-top: 14px; font-size: 12px; opacity: 0.6; }
+  .memory { overflow-wrap: anywhere; }
+  .memory th:first-child, .memory td:first-child { text-align: left; }
 </style></head><body><main>
 <h1>${esc(title)}</h1>
 <p class="meta">${esc(r.origin)} · ${analysis.pages.length} 个页面（成功 ${ok.length}） · Lighthouse ${esc(r.lighthouseVersion)} · 手机模式 · ${esc(VISIT_LABELS[r.visit] ?? r.visit)} · 每页 ${r.runs} 次 · ${esc(fmtTime(r.startedAt))} – ${esc(fmtTime(r.finishedAt))}</p>
@@ -69,6 +75,7 @@ ${lines.join('\n')}
 <tfoot><tr><td class="page">中位数</td>${row('中位数', medScores, medMetrics)}</tr></tfoot>
 </table></div>
 <p class="hint">按性能分从低到高排列。颜色按 Lighthouse 手机端阈值：绿＝好，橙＝需改进，红＝差。“→”表示页面被重定向到的地址（例如未登录时跳到登录页）。</p>
+${memoryHtml ? `<section class="memory" aria-label="内存分析">\n${memoryHtml}</section>` : ''}
 </main></body></html>
 `
   const file = path.join(roundDir, 'index.html')

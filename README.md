@@ -285,11 +285,30 @@ export default {
 ### 问题如何筛选和排序
 
 1. 从实际 Lighthouse 审计提取问题：只收集 `metricSavings`、`numeric`、`binary` 类型中分数小于 `0.9` 的项目；性能分类的 `metrics`、`hidden` 组不作为优化问题。
-2. 按审计 ID 合并多页面问题。性能问题排在前面，按各页面影响值之和降序；相同时依次比较代表页面的节省字节数、受影响页面数、审计 ID。其他问题按受影响页面数降序，再按 ID 排序。
+2. 按问题 ID 合并多页面问题。Lighthouse 性能问题排在前面，按各页面影响值之和降序；相同时依次比较代表页面的节省字节数、受影响页面数、审计 ID。内存发现随后按受影响页面数降序、ID 排序；其余问题也按受影响页面数降序、ID 排序。
 3. 影响值使用 `0.25 × LCP + 0.30 × TBT + 0.10 × FCP + 0.25 × CLS × 1000`，前三项取 Lighthouse 估算可节省的毫秒数。**这是工具的排序依据，不是预计提分，也不是实测优化收益。**
 4. 内置 [规则库](src/analyze/rules.mjs) 提供问题分类与改法；未覆盖的审计保留 Lighthouse 标题和说明。manifest / source map 提供源码关联线索，仍需核实实际调用路径。
 
 可用 `categories` 调整扫描分类，用 `ai.sourceRoot`、`exclude`、字符预算和 `instructions` 控制分析范围与业务约束。目前没有用户自定义 `rules` 配置字段；修改内置规则需编辑规则库。
+
+### 内存采集与分析
+
+每次 Lighthouse 扫描后通过 Chrome DevTools Protocol 采集已用堆、堆变化、分配采样和脱离 DOM 节点。堆时间轴和分配采样默认各观察 1 秒。各运行的原始数据保存在 `pages/<页面>/run-N/memory.json`；页面 `summary.json` 的 `median.memory` 保存成功运行的有效数值中位数，顶层 `memory` 提供同一聚合结果。增长率和分配样本率先按各运行时长计算，再取中位数。
+
+以下为工具内置的启发式阈值，不是浏览器标准，也不计入 Lighthouse 分数或估算收益：
+
+| 发现 | 触发条件 |
+|---|---|
+| 高堆占用 | 已用堆 ≥100 MiB，或占可测堆上限的 ≥80% |
+| 疑似脱离 DOM 泄漏 | 脱离节点 ≥10，或可测脱离内存 ≥1 MiB |
+| 堆快速增长 | 观测至少 1 秒，堆增量 ≥10 MiB 且增长率 ≥5 MiB/s |
+| 高分配样本率 | 采样至少 1 秒，分配样本率 ≥100 样本/s |
+
+分配采样默认间隔为 32 KiB；样本率是分配活动的代理量，不是精确的对象分配次数。脱离节点可能来自正常缓存，报告只提示疑似泄漏，应通过重复业务交互、GC 后堆快照和引用链确认。`growthRate` 兼容字段记录观测期堆增量（bytes），`growthRatePerSecond` 才是 bytes/s。
+
+打开轮次的 `index.html`，可直接查看内存概况、各页面的规则证据、处理建议和逐次原始数据链接；`analysis.json` 与开发版／负责人版 Markdown、HTML 报告同步包含内存聚合与发现。采集失败、不受支持或无法测量的字段保留为 null，报告显示“–”，不会按 0 参与聚合；全部采集失败会明确显示“无法判断”，没有内存数据的旧轮次仍可分析。内存概况的有效次数表示至少有一项内存数据可用，各字段实际可用次数可能不同。
+
+对已有轮次运行 `npx lhkit analyze <轮次>` 会重新生成总览和两版报告。成功运行的摘要缺少 `memory` 字段时，分析器会读取对应的 `run-N/memory.json` 恢复并聚合；显式 `memory: null` 仍表示采集失败。完全没有原始内存数据的轮次需重新扫描才能获得内存分析。
 
 ### AI 建议如何校验
 
@@ -324,6 +343,8 @@ npx lhkit ai-import ./reply.json review-001 --config ./apps/web
 ├── runs/<轮次>/
 │   ├── index.html                  # 总览
 │   ├── pages/<页面>/run-N/lighthouse.* # 每次扫描的原始 JSON / HTML
+│   ├── pages/<页面>/run-N/memory.json # 每次扫描的原始内存采集
+│   ├── pages/<页面>/summary.json    # 分数、指标、内存中位数与各次运行
 │   ├── analysis.json               # 合并问题和 AI 建议
 │   ├── docs/{dev,lead}.{md,html}    # 开发版 / 负责人版
 │   ├── ai/request.json             # 执行 ai-export 后生成

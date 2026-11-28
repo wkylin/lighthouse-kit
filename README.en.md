@@ -287,11 +287,30 @@ Page arguments must start with `/`. They replace the configured page selection a
 ### How findings are selected and prioritized
 
 1. Extract findings from actual Lighthouse audits: include only `metricSavings`, `numeric`, or `binary` audits with a score below `0.9`. Performance audits in the `metrics` and `hidden` groups are excluded from optimization findings.
-2. Merge findings by audit ID across pages. Performance findings come first, sorted by their summed impact across pages, then by the representative page's estimated bytes saved, affected page count, and audit ID. Other findings are sorted by affected page count, then ID.
+2. Merge findings by ID across pages. Lighthouse performance findings come first, sorted by their summed impact across pages, then by the representative page's estimated bytes saved, affected page count, and audit ID. Memory findings follow, sorted by affected page count, then ID. The remaining findings are also sorted by affected page count, then ID.
 3. Impact is `0.25 × LCP + 0.30 × TBT + 0.10 × FCP + 0.25 × CLS × 1000`, using Lighthouse's estimated milliseconds saved for the first three values. **This is a prioritization heuristic, not a predicted score increase or measured optimization result.**
 4. The built-in [rule library](src/analyze/rules.mjs) supplies categories and advice. Unmapped audits retain Lighthouse titles and descriptions. Manifest / source map associations provide leads; verify the actual execution path.
 
 Use `categories` to select audit categories, and `ai.sourceRoot`, `exclude`, source budgets, and `instructions` to control analysis scope and business constraints. There is currently no custom `rules` configuration field; editing built-in rules requires changing the rule library.
+
+### Memory collection and analysis
+
+After each Lighthouse scan, Chrome DevTools Protocol collects used heap, heap changes, allocation samples, and detached DOM nodes. The heap timeline and allocation sampling each observe the page for 1 second by default. Raw data is saved to `pages/<page>/run-N/memory.json`; `median.memory` in the page's `summary.json` contains medians of valid values from successful runs, with the same aggregate available as the top-level `memory` field. Growth and allocation sample rates are calculated for each run's duration before taking the median.
+
+These built-in thresholds are heuristics, not browser standards. Memory findings do not affect Lighthouse scores or estimated savings:
+
+| Finding | Trigger |
+|---|---|
+| High heap usage | Used heap ≥100 MiB, or ≥80% of an available heap limit |
+| Suspected detached DOM leak | ≥10 detached nodes, or ≥1 MiB of measurable detached memory |
+| Rapid heap growth | At least 1 second observed, heap increase ≥10 MiB and growth ≥5 MiB/s |
+| High allocation sample rate | At least 1 second sampled, with ≥100 samples/s |
+
+Allocation sampling uses a 32 KiB interval by default. Its sample rate is a proxy for allocation activity, not an exact object allocation count. Detached nodes can come from legitimate caches; confirm a suspected leak through repeated interactions, heap snapshots after GC, and retaining paths. The legacy `growthRate` field records the observed heap increase in bytes; `growthRatePerSecond` is measured in bytes/s.
+
+The round's `index.html` shows memory aggregates, evidence for each affected page, advice, and links to each run's raw data. `analysis.json` and both developer and lead Markdown/HTML reports include the same memory aggregates and findings. Failed, unsupported, or unmeasurable values stay null and appear as “–”; they are excluded from medians rather than treated as zero. If collection produces no valid data, reports explicitly say the result cannot be assessed. Older rounds without memory data remain analyzable. The valid run count means at least one memory value was available; individual fields may have fewer observations.
+
+Run `npx lhkit analyze <round>` to regenerate the overview and configured reports. For successful runs whose summaries lack a `memory` field, the analyzer restores data from the corresponding `run-N/memory.json` before aggregation; an explicit `memory: null` still means collection failed. Rounds with no raw memory data require a new scan for memory analysis.
 
 ### How AI advice is validated
 
@@ -326,6 +345,8 @@ Output defaults to `.lhkit/`; add it to `.gitignore`:
 ├── runs/<round>/
 │   ├── index.html                  # Overview
 │   ├── pages/<page>/run-N/lighthouse.* # Original JSON / HTML for each scan
+│   ├── pages/<page>/run-N/memory.json # Raw memory collection for each scan
+│   ├── pages/<page>/summary.json    # Score, metric and memory medians, plus runs
 │   ├── analysis.json               # Merged findings and AI advice
 │   ├── docs/{dev,lead}.{md,html}    # Developer / lead reports
 │   ├── ai/request.json             # Created by ai-export

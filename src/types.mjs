@@ -13,14 +13,26 @@
  *   outDir: string, keep: 'latest'|number }} Config */
 /** @typedef {{ perf:number|null, a11y:number|null, bp:number|null, seo:number|null, agentic:{pass:number,total:number}|null }} Scores */
 /** @typedef {{ fcp:number|null, lcp:number|null, tbt:number|null, cls:number|null, si:number|null }} Metrics */
+/** Memory 指标：4 个维度的内存分析数据 */
+/** @typedef {{ totalJsHeapSize:number|null, usedJsHeapSize:number|null, jsHeapSizeLimit:number|null, objectCount?:number|null, typeDistribution?:object, largeObjects?:Array }} HeapSnapshot */
+/** @typedef {{ samplingInterval?:number, allocations:{timestamp:number,memory:number}[], peakMemory:number, baselineMemory:number, growthRate:number, duration:number, growthRatePerSecond:number|null }} AllocationTimeline */
+/** @typedef {{ samplingInterval:number, topFunctions:Array, overhead?:number|null, duration:number, sampleCount:number, totalAllocatedBytes:number, allocationRate:number|null, allocationBytesPerSecond:number|null }} AllocationSampling */
+/** @typedef {{ detachedCount:number, detachedMemory:number|null, topDetached:Array }} DetachedElements */
+/** @typedef {{ heapSnapshot:HeapSnapshot|null, allocationTimeline:AllocationTimeline|null, allocationSampling:AllocationSampling|null, detachedElements:DetachedElements|null, collectedAt:string }} MemoryMetrics */
+/** 仅含数值中位数，原始时间轴、热点、节点列表及时间戳仍在 runs[].memory。 */
+/** @typedef {{ runs:number,
+ *   heapSnapshot:{usedJsHeapSize:number|null,totalJsHeapSize:number|null,jsHeapSizeLimit:number|null,heapUsageRatio:number|null}|null,
+ *   allocationTimeline:{samplingInterval:number|null,baselineMemory:number|null,peakMemory:number|null,growthRate:number|null,duration:number|null,growthRatePerSecond:number|null}|null,
+ *   allocationSampling:{samplingInterval:number|null,duration:number|null,sampleCount:number|null,totalAllocatedBytes:number|null,allocationRate:number|null,allocationBytesPerSecond:number|null}|null,
+ *   detachedElements:{detachedCount:number|null,detachedMemory:number|null}|null }} MemorySummary */
 /** warnings：Lighthouse 的 runWarnings（例如加载超时），各次去重合并；旧轮次的 summary 没有这一项。 */
-/** @typedef {{ page:string, slug:string, ok:boolean, error:string|null, finalUrl:string|null, warnings?:string[], runs:{index:number, ok:boolean, error:string|null, scores:Scores, metrics:Metrics, warnings?:string[]}[], representative:number|null, median:{scores:Scores, metrics:Metrics}|null }} PageSummary */
+/** @typedef {{ page:string, slug:string, ok:boolean, error:string|null, finalUrl:string|null, warnings?:string[], runs:{index:number, ok:boolean, error:string|null, scores:Scores|null, metrics:Metrics|null, memory?:MemoryMetrics|null, warnings?:string[]}[], representative:number|null, median:{scores:Scores, metrics:Metrics, memory?:MemorySummary|null}|null, memory?:MemorySummary|MemoryMetrics|null }} PageSummary */
 /** @typedef {{ id:string, name:string|null, partial:boolean, pagesRequested:string[], origin:string, startedAt:string, finishedAt:string|null,
  *   status:'running'|'complete'|'failed-pages'|'aborted', failedPages:string[], lighthouseVersion:string, visit:string, formFactor:string, runs:number,
  *   git:{commit:string, dirty:boolean}|null, buildFingerprint:string|null,
  *   discovery?:{maxPages:number,maxDepth:number,visited:number,limited:boolean,limitReasons:string[],errors:number,skipped:{url:string,reason:string}[]} }} RoundMeta */
 /** @typedef {{ url?:string, selector?:string, snippet?:string, label?:string, ms?:number, bytes?:number, source?:{file:string, share:number}|null }} Evidence */
-/** @typedef {{ id:string, category:string, group:string, title:string, advice:string, score:number, savings:{lcp:number,tbt:number,fcp:number,cls:number,bytes:number}, impact:number, evidence:Evidence[] }} Finding */
+/** @typedef {{ id:string, category:string, group:string, title:string, advice:string, score:number|null, savings:{lcp:number,tbt:number,fcp:number,cls:number,bytes:number}, impact:number, evidence:Evidence[] }} Finding */
 /** 新字段可选以兼容历史建议。 */
 /** @typedef {{cause:string, fix:string, model:string, confidence?:'high'|'medium'|'low', evidence?:{file:string,quote:string}[], verification?:string[], carried?:boolean}} AiAdvice */
 /** @typedef {Finding & { pages:string[], impactTotal:number, perPage:{page:string, impact:number, evidence:Evidence[]}[], ai:AiAdvice|null }} MergedFinding */

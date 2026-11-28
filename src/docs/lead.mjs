@@ -1,5 +1,6 @@
 // 负责人版文档：分数、最差页面、与上一轮的变化、问题类别分布、趋势；不含代码细节。
 import { CATEGORY_LABELS, CATEGORY_ORDER } from '../analyze/rules.mjs'
+import { memorySection } from './memory.mjs'
 import { TIMEOUT_MARK, VISIT_LABELS, cell, fmtAgentic, fmtCls, fmtMs, fmtS, fmtScore, fmtTime, loadTimedOut, median, redirectMark, signed } from './format.mjs'
 
 const okPages = (a) => a.pages.filter((p) => p.ok && p.median)
@@ -101,7 +102,7 @@ function categorySection(a, lines) {
     if (!fs.length) continue
     const pages = new Set(fs.flatMap((f) => f.pages))
     const impact = fs.reduce((s, f) => s + f.impactTotal, 0)
-    rows.push(`| ${CATEGORY_LABELS[cat] ?? cat} | ${fs.length} | ${pages.size} | ${impact ? fmtMs(impact) : '–'} |`)
+    rows.push(`| ${CATEGORY_LABELS[cat] ?? cat} | ${fs.length} | ${pages.size} | ${cat !== 'memory' && impact ? fmtMs(impact) : '–'} |`)
   }
   if (!rows.length) {
     lines.push('没有未通过的审计项。', '')
@@ -109,6 +110,7 @@ function categorySection(a, lines) {
   }
   lines.push('| 类别 | 问题数 | 涉及页面 | 估算影响 |', '|---|---|---|---|', ...rows, '')
   lines.push('估算影响按 Lighthouse 的分数权重折算（LCP 25%、TBT 30%、FCP 10%、CLS 25%），只用于排序比较。', '')
+  if (a.findings.some((f) => f.group === 'memory')) lines.push('内存发现不换算为毫秒，也不计入 Lighthouse 估算收益。', '')
 }
 
 function trendSection(a, ctx, lines) {
@@ -143,6 +145,7 @@ export function renderLeadDoc(analysis, ctx) {
   lines.push(`- 方式：Lighthouse ${r.lighthouseVersion}，手机模式，${VISIT_LABELS[r.visit] ?? r.visit}，每页 ${r.runs} 次`)
   lines.push(`- 页面：${analysis.pages.length} 个，成功 ${ok}，失败 ${analysis.pages.length - ok}`, '')
   scoresSection(analysis, lines)
+  memorySection(analysis, lines, { findings: true })
   worstSection(analysis, lines)
   compareSection(analysis, ctx, lines)
   categorySection(analysis, lines)

@@ -28,11 +28,16 @@ export const PAGE_CSS = `
  * @returns {string}
  */
 export function markdownToHtmlPage(markdown, title) {
-  const body = md.render(markdown).replace(/<table>/g, '<div class="wrap"><table>').replace(/<\/table>/g, '</table></div>')
+  const body = markdownToHtmlFragment(markdown)
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
 <style>${PAGE_CSS}</style></head><body><main>
 ${body}</main></body></html>
 `
+}
+
+/** 报告与总览共用的安全 Markdown 片段，表格在窄屏可横向滚动。 */
+export function markdownToHtmlFragment(markdown) {
+  return md.render(markdown).replace(/<table>/g, '<div class="wrap"><table>').replace(/<\/table>/g, '</table></div>')
 }
