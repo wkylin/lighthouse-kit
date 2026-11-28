@@ -2,12 +2,19 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 import lighthouse from 'lighthouse'
 import puppeteer from 'puppeteer-core'
 import { findChrome } from './chrome.mjs'
 import { loadTimedOut } from './docs/format.mjs'
 import { writeLighthouseHtml } from './report/lighthouse-html.mjs'
 import { pageSlug, writeRoundMeta } from './round.mjs'
+
+// Resolve through Lighthouse so this also works with unhoisted dependencies.
+const lighthouseRequire = createRequire(import.meta.resolve('lighthouse'))
+const traceCacheUrl = pathToFileURL(lighthouseRequire.resolve('@paulirish/trace_engine/models/trace/extras/StackTraceForEvent.js'))
+const { stackTraceForEventInTrace, clearCacheForTrace } = await import(traceCacheUrl.href)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -139,6 +146,9 @@ async function runOnce({ config, url, dir, signal, maxWaitForLoad, chromePath })
     return result.lhr
   } finally {
     signal?.removeEventListener('abort', onAbort)
+    // Lighthouse 13.5 leaves parsed traces strongly held by this stack cache.
+    // Reports are complete; release the cache before starting another run.
+    for (const trace of stackTraceForEventInTrace.keys()) clearCacheForTrace(trace)
     // 确保页面先关闭
     await page?.close().catch(() => {})
     await sleep(500)
