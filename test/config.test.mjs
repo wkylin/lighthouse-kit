@@ -102,11 +102,34 @@ test('runs override', () => {
   assert.equal(norm({ serve: { url: 'https://x.test' }, pages: ['/'] }, { runs: 3 }).runs, 3)
 })
 
+test('omitting pages enables discovery from the complete URL or local service root', () => {
+  const c = norm({ serve: { url: 'https://example.com/app/start?lang=zh#intro' } })
+  assert.deepEqual(c.pages, ['/app/start?lang=zh#intro'])
+  assert.equal(c.serve.url, 'https://example.com')
+  assert.deepEqual(c.crawl, { enabled: true, maxPages: 50, maxDepth: 3, timeoutMs: 15000 })
+  assert.deepEqual(norm({ serve: { static: 'dist' } }).pages, ['/'])
+  assert.equal(norm({ serve: { static: 'dist' }, pages: ['/'] }).crawl.enabled, false)
+})
+
+test('crawl limits accept configuration and CLI overrides without changing explicit pages', () => {
+  const c = norm({ serve: { url: 'https://example.com/app/' }, pages: ['/a'], crawl: { maxPages: 20, maxDepth: 2, timeoutMs: 7000 } }, { maxPages: 5, maxDepth: 0 })
+  assert.deepEqual(c.crawl, { enabled: false, maxPages: 5, maxDepth: 0, timeoutMs: 7000 })
+  assert.deepEqual(c.pages, ['/a'])
+  assert.equal(c.serve.url, 'https://example.com/app/')
+})
+
+test('invalid crawl configuration and overrides are configuration errors', () => {
+  for (const crawl of [true, [], { maxPages: 0 }, { maxPages: 1.5 }, { maxPages: '3' }, { maxDepth: -1 }, { maxDepth: 0.5 }, { timeoutMs: 0 }, { timeoutMs: 2147483648 }])
+    assert.throws(() => norm({ serve: { url: 'https://example.com' }, crawl }), e => e instanceof ConfigError && /crawl/.test(e.message))
+  for (const overrides of [{ maxPages: 0 }, { maxDepth: -1 }])
+    assert.throws(() => norm({ serve: { url: 'https://example.com' } }, overrides), ConfigError)
+})
+
 test('rejects bad configs with ConfigError', () => {
   const ok = { serve: { url: 'https://x.test' }, pages: ['/'] }
   const bad = [
     { ...ok, pages: [] },
-    { ...ok, pages: undefined },
+    { ...ok, pages: null },
     { ...ok, pages: ['m/home'] },
     { serve: { command: 'pnpm preview' }, pages: ['/'] },
     { serve: { command: 'a', static: 'dist', url: 'http://localhost:1' }, pages: ['/'] },
@@ -143,6 +166,108 @@ test('loadConfig finds lhkit.config.mjs, else lhkit.config.js, else throws Confi
   }
 })
 
+test('loadConfig accepts --url without a file and creates no configuration or output', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lhkit-url-config-'))
+  try {
+    const c = await loadConfig(dir, { url: 'https://example.com' })
+    assert.equal(c.root, dir)
+    assert.equal(c.configFile, null)
+    assert.equal(c.serve.mode, 'url')
+    assert.equal(c.serve.url, 'https://example.com')
+    assert.deepEqual(c.pages, ['/'])
+    assert.equal(c.runs, 1)
+    assert.equal(c.build, null)
+    assert.equal(c.ai.enabled, false)
+    assert.equal(c.outDir, path.join(dir, '.lhkit'))
+    assert.equal((await loadConfig(dir, { url: 'https://example.com', runs: 3 })).runs, 3)
+    assert.deepEqual(await fs.readdir(dir), [])
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('standalone --url preserves complete page paths, queries, fragments and ports', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lhkit-url-config-'))
+  try {
+    for (const [url, port] of [
+      ['https://example.com/docs/start?lang=zh%2FCN#intro', 443],
+      ['http://localhost:4321/app/', 4321],
+      ['http://localhost/', 80],
+      ['https://example.com/?x=1#top', 443],
+      ['https://example.com/docs?', 443],
+      ['https://example.com/docs#', 443],
+    ]) {
+      const c = await loadConfig(dir, { url })
+      assert.equal(c.serve.url + c.pages[0], url)
+      assert.equal(c.serve.port, port)
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('--url and --runs override an existing config while preserving project settings', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lhkit-url-config-'))
+  const file = path.join(dir, 'lhkit.config.mjs')
+  const text = `export default { build: { command: 'npm run build' }, serve: { static: 'dist' }, pages: ['/a', '/b'], runs: 2,
+    outDir: 'reports', sourceMap: { maps: 'dist' }, beforePage: async () => {}, ai: { enabled: true } }\n`
+  try {
+    await fs.writeFile(file, text)
+    const c = await loadConfig(dir, { url: 'https://staging.example.com/app/', runs: 3 })
+    assert.equal(c.configFile, file)
+    assert.equal(c.serve.url, 'https://staging.example.com/app/')
+    assert.equal(c.serve.mode, 'url')
+    assert.equal(c.build, null)
+    assert.equal(c.runs, 3)
+    assert.deepEqual(c.pages, ['/a', '/b'])
+    assert.equal(c.outDir, path.join(dir, 'reports'))
+    assert.equal(c.sourceMap.maps, path.join(dir, 'dist'))
+    assert.equal(typeof c.beforePage, 'function')
+    assert.equal(c.ai.enabled, true)
+    assert.equal(await fs.readFile(file, 'utf8'), text)
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('--url must be a valid HTTP/HTTPS URL with or without a config', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lhkit-url-config-'))
+  try {
+    for (const configured of [false, true]) {
+      if (configured) await fs.writeFile(path.join(dir, 'lhkit.config.mjs'), "export default { serve: { url: 'https://example.com' }, pages: ['/'] }\n")
+      for (const url of ['', 'example.com', '//example.com', 'file:///tmp/index.html', 'ftp://example.com', 'javascript:alert(1)'])
+        await assert.rejects(loadConfig(dir, { url }), e => e instanceof ConfigError && /--url/.test(e.message), url)
+    }
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('--url never hides a broken existing configuration', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lhkit-url-config-'))
+  try {
+    await fs.writeFile(path.join(dir, 'lhkit.config.mjs'), 'export default { pages: [] }\n')
+    await assert.rejects(loadConfig(dir, { url: 'https://example.com' }), e => e instanceof ConfigError && /pages/.test(e.message))
+    await fs.writeFile(path.join(dir, 'lhkit.config.js'), 'export default {\n')
+    await fs.rm(path.join(dir, 'lhkit.config.mjs'))
+    await assert.rejects(loadConfig(dir, { url: 'https://example.com' }), e => e instanceof ConfigError && /读取 lhkit\.config\.js 失败/.test(e.message))
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('standalone --url requires an existing project directory', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lhkit-url-config-'))
+  try {
+    const file = path.join(dir, 'not-a-directory')
+    await fs.writeFile(file, '')
+    for (const root of [path.join(dir, 'missing'), file])
+      await assert.rejects(loadConfig(root, { url: 'https://example.com' }), e => e instanceof ConfigError && /目录/.test(e.message))
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('wrong types are ConfigError, not silently mangled', () => {
   const ok = { serve: { url: 'https://x.test' }, pages: ['/'] }
   const bad = [
@@ -162,7 +287,7 @@ test('wrong types are ConfigError, not silently mangled', () => {
 })
 
 test('pages that would share a result folder are rejected', () => {
-  for (const pages of [['/', '/root'], ['/a?b', '/a_b'], ['/foo', '/foo/'], ['/m/home', '/m/home']])
+  for (const pages of [['/', '/root'], ['/a?b', '/a_b'], ['/foo', '/foo/'], ['/m/home', '/m/home'], ['/a/b', '/a//b']])
     assert.throws(() => norm({ serve: { url: 'https://x.test' }, pages }), (e) => e instanceof ConfigError && /同一个/.test(e.message), JSON.stringify(pages))
 })
 

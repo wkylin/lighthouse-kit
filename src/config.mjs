@@ -49,13 +49,19 @@ export function checkPages(pages) {
   }
 }
 
-function portOf(url) {
+function parseUrl(url, label = 'serve.url') {
   let u
   try {
     u = new URL(url)
   } catch {
-    fail(`serve.url 不是有效网址：${url}`)
+    fail(`${label} 必须是有效的 HTTP/HTTPS 网址：${url}`)
   }
+  if (!['http:', 'https:'].includes(u.protocol)) fail(`${label} 必须是 HTTP/HTTPS 网址：${url}`)
+  return u
+}
+
+function portOf(url, label = 'serve.url') {
+  const u = parseUrl(url, label)
   if (u.port) return Number(u.port)
   return u.protocol === 'https:' ? 443 : 80
 }
@@ -64,8 +70,8 @@ function portOf(url) {
  * 把原始配置规范化为 Config。纯函数：不读文件系统。
  * @param {object} raw
  * @param {string} root 项目根目录（绝对路径）
- * @param {string} configFile 配置文件路径
- * @param {{url?: string, runs?: number}} [overrides]
+ * @param {string|null} configFile 配置文件路径；直接扫描 URL 时为 null
+ * @param {{url?: string, runs?: number, maxPages?: number, maxDepth?: number}} [overrides]
  * @returns {import('./types.mjs').Config}
  */
 export function normalizeConfig(raw, root, configFile, overrides = {}) {
@@ -73,9 +79,21 @@ export function normalizeConfig(raw, root, configFile, overrides = {}) {
   const abs = (p) => (p == null ? null : path.resolve(root, p))
 
   // 页面
-  const pages = raw.pages
+  const autoPages = raw.pages === undefined
+  let pages = autoPages ? ['/'] : raw.pages
   if (!Array.isArray(pages) || pages.length === 0) fail('pages 必须是非空数组，例如 ["/", "/about"]')
   checkPages(pages)
+  if (raw.crawl != null && !isObject(raw.crawl)) fail('crawl 必须是配置对象')
+  const crawlRaw = raw.crawl ?? {}
+  const crawl = {
+    enabled: autoPages,
+    maxPages: overrides.maxPages ?? crawlRaw.maxPages ?? 50,
+    maxDepth: overrides.maxDepth ?? crawlRaw.maxDepth ?? 3,
+    timeoutMs: crawlRaw.timeoutMs ?? 15000,
+  }
+  if (!Number.isSafeInteger(crawl.maxPages) || crawl.maxPages < 1) fail('crawl.maxPages 必须是 ≥ 1 的整数')
+  if (!Number.isSafeInteger(crawl.maxDepth) || crawl.maxDepth < 0) fail('crawl.maxDepth 必须是 ≥ 0 的整数')
+  if (!Number.isSafeInteger(crawl.timeoutMs) || crawl.timeoutMs < 1 || crawl.timeoutMs > 2147483647) fail('crawl.timeoutMs 必须是 1–2147483647 的整数')
   if (raw.outDir != null && typeof raw.outDir !== 'string') fail('outDir 必须是字符串')
   if (raw.chromePath != null && typeof raw.chromePath !== 'string') fail('chromePath 必须是字符串（Chrome 可执行文件的路径）')
   if (raw.categories != null) {
@@ -91,8 +109,8 @@ export function normalizeConfig(raw, root, configFile, overrides = {}) {
   if (typeof readyPath !== 'string' || !readyPath.startsWith('/')) fail('serve.readyPath 必须以 / 开头')
   /** @type {import('./types.mjs').ServeConfig} */
   let serve
-  if (overrides.url) {
-    serve = { mode: 'url', url: overrides.url, port: portOf(overrides.url), readyPath, proxy: {}, timeoutMs }
+  if (overrides.url != null) {
+    serve = { mode: 'url', url: overrides.url, port: portOf(overrides.url, '--url'), readyPath, proxy: {}, timeoutMs }
   } else if (rs.command && rs.static) {
     fail('serve.command 与 serve.static 只能二选一')
   } else if (rs.command) {
@@ -107,6 +125,13 @@ export function normalizeConfig(raw, root, configFile, overrides = {}) {
     serve = { mode: 'url', url: rs.url, port: portOf(rs.url), readyPath, proxy: {}, timeoutMs }
   } else {
     fail('serve 需要 command + url、static 或 url 三者之一')
+  }
+  if (autoPages && serve.mode === 'url') {
+    const url = parseUrl(serve.url)
+    // 自动发现从完整入口开始，显式 pages 继续沿用基础地址的拼接语义。
+    const base = new URL('/', url).href.slice(0, -1)
+    pages = [url.href.slice(base.length)]
+    serve = { ...serve, url: base }
   }
 
   // 构建（url 模式不构建）
@@ -180,6 +205,7 @@ export function normalizeConfig(raw, root, configFile, overrides = {}) {
     serve,
     https,
     pages: [...pages],
+    crawl,
     beforePage: raw.beforePage ?? null,
     runs,
     visit,
@@ -215,15 +241,21 @@ export function normalizeConfig(raw, root, configFile, overrides = {}) {
 }
 
 /**
- * 在 cwd 查找并读取配置文件。
+ * 在 cwd 查找并读取配置文件；没有配置时可用 --url 直接扫描。
  * @param {string} cwd
- * @param {{url?: string, runs?: number}} [overrides]
+ * @param {{url?: string, runs?: number, maxPages?: number, maxDepth?: number}} [overrides]
  * @returns {Promise<import('./types.mjs').Config>}
  */
 export async function loadConfig(cwd, overrides = {}) {
   const root = path.resolve(cwd)
   const file = CONFIG_FILES.map((name) => path.join(root, name)).find((f) => fs.existsSync(f))
-  if (!file) fail(`在 ${root} 找不到 ${CONFIG_FILES.join(' 或 ')}（可运行 lhkit init 生成）`)
+  if (!file) {
+    if (overrides.url == null)
+      fail(`在 ${root} 找不到 ${CONFIG_FILES.join(' 或 ')}（可运行 lhkit init 生成，或使用 lhkit scan --url <网址> 直接扫描）`)
+    parseUrl(overrides.url, '--url')
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) fail(`项目目录不存在或不是目录：${root}`)
+    return normalizeConfig({}, root, null, overrides)
+  }
   let mod
   try {
     mod = await import(`${pathToFileURL(file).href}?t=${fs.statSync(file).mtimeMs}`)

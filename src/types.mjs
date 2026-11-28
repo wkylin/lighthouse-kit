@@ -2,8 +2,8 @@
 
 /** @typedef {'command'|'static'|'url'} ServeMode */
 /** @typedef {{ mode: ServeMode, command?: string, url?: string, static?: string, port: number, readyPath: string, proxy: Record<string,string>, timeoutMs: number }} ServeConfig */
-/** @typedef {{ root: string, configFile: string, build: {command: string, env: Record<string,string>}|null, serve: ServeConfig,
- *   https: {enabled: boolean, port: number}, pages: string[], beforePage: ((ctx:{page:any, url:string, warmup:boolean}) => Promise<void>)|null,
+/** @typedef {{ root: string, configFile: string|null, build: {command: string, env: Record<string,string>}|null, serve: ServeConfig,
+ *   https: {enabled: boolean, port: number}, pages: string[], crawl: {enabled: boolean, maxPages: number, maxDepth: number, timeoutMs: number}, beforePage: ((ctx:{page:any, url:string, warmup:boolean}) => Promise<void>)|null,
  *   runs: number, visit: 'first'|'repeat', formFactor: 'mobile', categories: string[], chromePath: string|null,
  *   sourceMap: {manifest: string|null, maps: string|null}, docs: {audiences: ('dev'|'lead')[], lang: 'zh-CN'},
  *   ai: {enabled: boolean, provider: import('../types/index.d.ts').AiProvider, model: string, apiKeyEnv: string, baseURL: string|null,
@@ -17,7 +17,8 @@
 /** @typedef {{ page:string, slug:string, ok:boolean, error:string|null, finalUrl:string|null, warnings?:string[], runs:{index:number, ok:boolean, error:string|null, scores:Scores, metrics:Metrics, warnings?:string[]}[], representative:number|null, median:{scores:Scores, metrics:Metrics}|null }} PageSummary */
 /** @typedef {{ id:string, name:string|null, partial:boolean, pagesRequested:string[], origin:string, startedAt:string, finishedAt:string|null,
  *   status:'running'|'complete'|'failed-pages'|'aborted', failedPages:string[], lighthouseVersion:string, visit:string, formFactor:string, runs:number,
- *   git:{commit:string, dirty:boolean}|null, buildFingerprint:string|null }} RoundMeta */
+ *   git:{commit:string, dirty:boolean}|null, buildFingerprint:string|null,
+ *   discovery?:{maxPages:number,maxDepth:number,visited:number,limited:boolean,limitReasons:string[],errors:number,skipped:{url:string,reason:string}[]} }} RoundMeta */
 /** @typedef {{ url?:string, selector?:string, snippet?:string, label?:string, ms?:number, bytes?:number, source?:{file:string, share:number}|null }} Evidence */
 /** @typedef {{ id:string, category:string, group:string, title:string, advice:string, score:number, savings:{lcp:number,tbt:number,fcp:number,cls:number,bytes:number}, impact:number, evidence:Evidence[] }} Finding */
 /** 新字段可选以兼容历史建议。 */

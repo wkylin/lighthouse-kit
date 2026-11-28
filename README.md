@@ -5,7 +5,7 @@
 | [安装](#安装) | [配置](#配置) | [Options](#options) | [规则](#规则) |
 | :---: | :---: | :---: | :---: |
 
-按项目配置完成 **构建 → 启动服务 → 逐页 Lighthouse 扫描 → 规则与可选 AI 分析 → 生成报告**。适用于 React、Vue，以及其他能构建或提供访问地址的前端项目。
+直接扫描网址，或按项目配置完成 **构建 → 启动服务 → 逐页 Lighthouse 扫描 → 规则与可选 AI 分析 → 生成报告**。适用于 React、Vue，以及其他能构建或提供访问地址的前端项目。
 
 - 扫描性能、无障碍、最佳实践、SEO 和 Agentic Browsing，生成 HTML 总览、原始 Lighthouse 报告，以及开发版、负责人版 Markdown / HTML 文档。
 - 通过 manifest 和 source map 将资源关联到源码，合并多页面问题并排序，方便确定优化顺序。
@@ -19,7 +19,18 @@
 
 ### CLI：完成第一次扫描
 
-在业务项目中安装，使用该项目原有的包管理器：
+已有可访问的网址时，可以直接扫描，无需初始化配置或安装到项目：
+
+```bash
+npx lighthouse-kit scan --url https://example.com
+npx lighthouse-kit scan --url https://example.com --max-pages 100 --max-depth 5
+# 只扫描指定页面
+npx lighthouse-kit scan '/about?lang=zh#intro' --url https://example.com --runs 3
+```
+
+未指定页面时，从完整入口网址、sitemap 和浏览器渲染后的站内链接自动发现页面，默认最多 50 页、链接深度 3 层，再逐页执行一次手机模式扫描和规则分析。结果写入当前目录的 `.lhkit/`，终端会输出 HTML 总览和文档路径，不会创建配置文件。`--runs 3` 可让每页多次扫描取中位数。也支持 `run --url`，会在完成后打开总览。
+
+需要构建项目、选择多个页面或自定义登录、源码映射及 AI 时，在业务项目中安装并配置，使用该项目原有的包管理器：
 
 ```bash
 npm install -D lighthouse-kit
@@ -79,6 +90,28 @@ git push --follow-tags
 ## 配置
 
 默认只在当前目录依次查找 `lhkit.config.mjs`、`lhkit.config.js`。先选择服务方式，再按需要添加源码映射与 AI。
+
+`run`、`scan` 同时兼容配置文件和 `--url`：找到配置时读取项目设置，`--url` 覆盖目标地址，`--runs` 和命令行页面参数覆盖对应设置；找不到配置时，提供 `--url` 即可使用默认参数。已有配置的读取或校验错误仍会报告。
+
+无配置或配置中未写 `pages` 时，URL 的路径、查询参数和 hash 作为完整入口保留，开启自动发现；显式传入页面参数（如 `scan / /about --url https://example.com`）则只扫描该 origin 下的指定路径。有配置且设置了 `pages` 时，`--url` 继续作为配置页面的基础地址，支持 `/app/` 等部署前缀。
+
+### 自动发现页面
+
+省略 `pages` 即启用自动发现；命令行页面列表优先于配置列表，两种显式列表都会跳过自动发现。只扫首页可用 `scan / --url https://example.com`，或配置 `pages: ['/']`。
+
+```js
+export default {
+  serve: { url: 'https://example.com' },
+  // 省略 pages，自动发现页面
+  crawl: { maxPages: 50, maxDepth: 3, timeoutMs: 15000 },
+}
+```
+
+发现过程读取 sitemap（含索引）及渲染后的链接，支持 `#/…`、`#!/…` 路由和有意义的查询参数；去重普通锚点和末尾斜杠别名，过滤静态资源、下载链接和退出登录链接。入口发生重定向时，以最终 origin 为站点范围，后续发现不跳转到站外。`beforePage` 在发现阶段也会执行。
+
+可用 `--max-pages`、`--max-depth` 覆盖配置上限。达到限制或遇到发现错误时，终端会提示，本轮标记为部分扫描，保留之前的完整结果。未出现在 sitemap 或可见链接中的私有路由、必须通过按钮或表单进入的页面，需要显式补充页面列表。
+
+链接深度限制沿链接的遍历，sitemap 页面作为直接入口，仍计入页数上限。单次发现最多读取 10 份 sitemap、每份 2 MiB，以及每页 2000 条链接；触及这些边界时也会记录具体原因。
 
 ### 本地构建项目
 
@@ -201,7 +234,8 @@ export default {
 | `--config DIR` | 所有命令 | 指定配置所在的项目目录 |
 | `--runs N` | `run`、`scan` | 每页扫描次数，取中位数，正整数 |
 | `--name NAME` | `run`、`scan` | 命名轮次，免于自动清理；使用未用过的名称 |
-| `--url URL` | `run`、`scan` | 临时切为 URL 模式，即使使用 `run` 也跳过构建 |
+| `--url URL` | `run`、`scan` | 覆盖目标地址；无配置时使用默认参数；跳过构建和起服务 |
+| `--max-pages N` / `--max-depth N` | `run`、`scan` | 自动发现最多页面数 / 链接深度，默认 `50` / `3` |
 | `--ai-dry-run` | `run`、`scan`、`analyze` | 预览已启用的 API 分析任务，不请求 API、不写 AI 缓存 |
 | `--force` | `init` | 覆盖已有配置 |
 | `--help` / `--version` | 顶层调用 | `npx lhkit --help` / `npx lhkit --version` |
@@ -213,7 +247,8 @@ export default {
 | 配置项 | 默认值 | 用途 |
 | --- | --- | --- |
 | `build.command` / `build.env` | 不构建 / `{}` | 项目构建命令及附加环境变量，URL 模式忽略 |
-| `pages` | 必填 | 非空页面路径数组；会写入同一结果目录的重复页面会报错 |
+| `pages` | 自动发现 | 显式设置非空数组时只扫列表；重复结果目录会报错 |
+| `crawl.maxPages` / `crawl.maxDepth` / `crawl.timeoutMs` | `50` / `3` / `15000` | 自动发现页数、链接深度与每次导航或 sitemap 请求超时（毫秒） |
 | `serve.port` / `serve.proxy` | `4173` / `{}` | 静态模式端口和接口前缀代理，支持 WebSocket |
 | `serve.readyPath` / `serve.timeoutMs` | `'/'` / `60000` | 服务就绪探测路径和超时（毫秒） |
 | `runs` / `visit` | `1` / `'first'` | 多次取中位数；`'repeat'` 会先预热以测试回访 |

@@ -1,6 +1,6 @@
 {
   "name": "lighthouse-kit",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "与框架无关的本地 Lighthouse 工具：构建、起服务、逐页扫描、规则分析（可选 AI），生成开发版与负责人版文档和总览页",
   "keywords": [
     "lighthouse",

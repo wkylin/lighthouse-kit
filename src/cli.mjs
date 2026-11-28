@@ -12,6 +12,7 @@ import { compareRounds } from './compare.mjs'
 import { findChrome } from './chrome.mjs'
 import { ConfigError, checkPages, loadConfig } from './config.mjs'
 import { writeDocs } from './docs/index.mjs'
+import { discoverPages } from './discover.mjs'
 import { BuildError, NotReadyError, PortInUseError } from './errors.mjs'
 import { gitInfo } from './git.mjs'
 import { appendHistory, comparableBaseline, historyEntryFromRound, readHistory, trend } from './history.mjs'
@@ -27,8 +28,8 @@ import { startTarget } from './serve/index.mjs'
 const ALLOWED = {
   init: ['force', 'config'],
   build: ['config'],
-  run: ['runs', 'name', 'url', 'ai-dry-run', 'config'],
-  scan: ['runs', 'name', 'url', 'ai-dry-run', 'config'],
+  run: ['runs', 'name', 'url', 'max-pages', 'max-depth', 'ai-dry-run', 'config'],
+  scan: ['runs', 'name', 'url', 'max-pages', 'max-depth', 'ai-dry-run', 'config'],
   analyze: ['ai-dry-run', 'config'],
   preview: ['config'],
   compare: ['config'],
@@ -41,6 +42,8 @@ const OPTIONS = {
   runs: { type: 'string' },
   name: { type: 'string' },
   url: { type: 'string' },
+  'max-pages': { type: 'string' },
+  'max-depth': { type: 'string' },
   'ai-dry-run': { type: 'boolean' },
   force: { type: 'boolean' },
 }
@@ -100,6 +103,13 @@ function parseRuns(value) {
   return n
 }
 
+function parseLimit(value, name, minimum) {
+  if (value == null) return undefined
+  const n = Number(value)
+  if (!value.trim() || !Number.isSafeInteger(n) || n < minimum) throw new ConfigError(`配置错误：--${name} 必须是 ≥ ${minimum} 的整数`)
+  return n
+}
+
 async function docsContext(outDir, meta, pages) {
   const entry = historyEntryFromRound(meta, pages)
   const entries = await readHistory(outDir)
@@ -131,9 +141,12 @@ async function renderOutputs(roundDir, analysis, config, meta) {
 
 async function runOrScan(command, values, positionals, ctx) {
   const { configDir } = ctx
-  const config = await loadConfig(configDir, { url: values.url, runs: parseRuns(values.runs) })
+  const config = await loadConfig(configDir, {
+    url: values.url, runs: parseRuns(values.runs),
+    maxPages: parseLimit(values['max-pages'], 'max-pages', 1), maxDepth: parseLimit(values['max-depth'], 'max-depth', 0),
+  })
   const requested = parsePages(positionals)
-  const pages = requested.length ? requested : config.pages
+  let pages = requested.length ? requested : config.pages
   // 先找 Chrome：找不到就是一条配置错误，不用等构建和起服务。
   const chromePath = findChrome(config)
   gitignoreHint(config, ctx.log)
@@ -156,7 +169,24 @@ async function runOrScan(command, values, positionals, ctx) {
     meta = { ...meta, buildFingerprint: buildFingerprint(config) }
     if (ac.signal.aborted) throw new BuildError('已中断', null)
     target = await startTarget(config, { log, logDir, signal: ac.signal })
-    const scanned = await scanRound({ config, origin: target.origin, roundDir: round.dir, meta, pages, log, signal: ac.signal, chromePath })
+    let origin = target.origin
+    if (!requested.length && config.crawl.enabled) {
+      log.info(`自动发现页面：最多 ${config.crawl.maxPages} 页，链接深度 ${config.crawl.maxDepth}`)
+      const discovered = await discoverPages({ config, origin, chromePath, signal: ac.signal, log })
+      origin = discovered.origin
+      pages = discovered.pages
+      meta = {
+        ...meta, origin, pagesRequested: pages, partial: discovered.limited || discovered.errors > 0,
+        discovery: {
+          maxPages: config.crawl.maxPages, maxDepth: config.crawl.maxDepth,
+          visited: discovered.visited, limited: discovered.limited, limitReasons: discovered.limitReasons,
+          errors: discovered.errors, skipped: discovered.skipped,
+        },
+      }
+      await writeRoundMeta(round.dir, meta)
+      log.info(`自动发现完成：${pages.length} 个页面，开始 Lighthouse 扫描`)
+    }
+    const scanned = await scanRound({ config, origin, roundDir: round.dir, meta, pages, log, signal: ac.signal, chromePath })
     meta = scanned.meta
   } catch (error) {
     meta = { ...meta, status: 'aborted', finishedAt: new Date().toISOString() }

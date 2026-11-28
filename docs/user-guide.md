@@ -1,13 +1,14 @@
 # lighthouse-kit 用户操作手册
 
-适用于 lighthouse-kit 0.2.x，面向需要扫描前端项目、解读 Lighthouse 结果和生成优化方案的开发者。命令在 macOS 或 Linux 终端执行；下文使用 npm，pnpm 或 Yarn 项目只需替换安装、构建和服务命令。
+适用于 lighthouse-kit 0.3.x，面向需要扫描前端项目、解读 Lighthouse 结果和生成优化方案的开发者。命令在 macOS 或 Linux 终端执行；下文使用 npm，pnpm 或 Yarn 项目只需替换安装、构建和服务命令。
 
-第一次使用按“安装 → 配置 → 扫描 → 看报告”操作。完成普通扫描后，再选择模型 API 自动分析，或让 Codex、Claude Code 等助手通过 skill 使用当前会话分析。
+已有网站地址时，可以用 `scan --url` 直接扫描；需要构建项目或自定义设置时，按“安装 → 配置 → 扫描 → 看报告”操作。完成普通扫描后，再选择模型 API 自动分析，或让 Codex、Claude Code 等助手通过 skill 使用当前会话分析。
 
 ## 1 选择使用方式
 
 | 方式 | 适合什么场景 | 需要什么 | 如何启动 |
 |---|---|---|---|
+| 直接扫描网址 | 扫描已启动的本地服务或网站 | Node、Chrome | `npx lighthouse-kit scan --url https://example.com` |
 | 普通扫描与规则分析 | 先获取分数、指标和基础建议 | Node、Chrome、lhkit 配置 | `npx lhkit run` |
 | 模型 API 分析 | 希望终端命令自动完成 AI 分析 | 普通扫描环境、模型 API Key | 开启 `ai.enabled` 后运行 `run`、`scan` 或 `analyze` |
 | 助手 skill 分析 | 正在 Codex、Claude Code 等助手里工作 | 普通扫描环境、skill、可读写文件和运行命令的助手 | 在助手中调用 `$lighthouse-kit` 或 `/lighthouse-kit` |
@@ -21,12 +22,12 @@ API 模式使用你配置的模型服务和 API 凭据。skill 模式由助手�
 ```bash
 cd /path/to/your-project
 node --version
-npm install -D lighthouse-kit@0.2.1
+npm install -D lighthouse-kit@0.3.0
 npx lhkit --version
 npx lhkit --help
 ```
 
-确认输出版本为 `0.2.1` 或后续兼容版本，帮助中存在 `ai-export` 和 `ai-import`。
+确认输出版本为 `0.3.0` 或后续兼容版本，帮助中存在 `ai-export` 和 `ai-import`。
 
 - Node 要求 ≥22.19，建议使用符合该要求的 Node LTS。
 - 本机需要安装 Chrome 或 Chromium。
@@ -36,20 +37,20 @@ npx lhkit --help
 pnpm 和 Yarn 的安装方式：
 
 ```bash
-pnpm add -D lighthouse-kit@0.2.1
+pnpm add -D lighthouse-kit@0.3.0
 # 或
-yarn add -D lighthouse-kit@0.2.1
+yarn add -D lighthouse-kit@0.3.0
 ```
 
 如果 pnpm 报 `ERR_PNPM_ADDING_TO_ROOT`，说明当前目录是 workspace 根目录。当应用就在根目录，或希望在根目录统一安装扫描工具时，显式加 `-w`：
 
 ```bash
-pnpm add -Dw lighthouse-kit@0.2.1
+pnpm add -Dw lighthouse-kit@0.3.0
 pnpm exec lhkit --version
 pnpm exec lhkit --help
 ```
 
-`-D` 表示开发依赖，`-w` 表示 workspace 根目录。需要安装到某个子包时，在子包目录执行 `pnpm add -D`，或用 `pnpm --filter 包名 add -D lighthouse-kit@0.2.1`；包名替换为目标子包的 `package.json` 中的 `name`。[pnpm 安装参数](https://pnpm.io/cli/add)
+`-D` 表示开发依赖，`-w` 表示 workspace 根目录。需要安装到某个子包时，在子包目录执行 `pnpm add -D`，或用 `pnpm --filter 包名 add -D lighthouse-kit@0.3.0`；包名替换为目标子包的 `package.json` 中的 `name`。[pnpm 安装参数](https://pnpm.io/cli/add)
 
 本手册后面的 `npx lhkit …`，在 pnpm 项目中可以写为 `pnpm exec lhkit …`。例如初始化使用 `pnpm exec lhkit init`，扫描使用 `pnpm exec lhkit run`。
 
@@ -163,7 +164,16 @@ serve: {
 
 ### 4.3 扫描已启动的服务或外部网站
 
-完整的最小网址配置：
+直接扫描无需配置文件，也无需先运行 `init`：
+
+```bash
+npx lighthouse-kit scan --url https://staging.example.com --name staging-review
+npx lighthouse-kit scan --url 'https://staging.example.com/products?lang=zh#details' --runs 3
+```
+
+没有配置时，从完整入口网址自动发现同源页面，再对每页做一次手机模式扫描和规则分析，并将 HTML 总览与文档写入当前目录的 `.lhkit/`。默认最多 50 页、链接深度 3 层，不会生成配置文件。入口的路径、查询参数和 hash 会保留。结果路径会显示在终端，打开输出的 `index.html` 即可查看报告；`run --url` 会自动打开总览。
+
+需要固定页面、登录准备或其他项目设置时，也可以保留网址配置：
 
 ```js
 export default {
@@ -183,7 +193,9 @@ npx lhkit scan --name staging-review
 npx lhkit scan --url https://staging.example.com --name staging-review-2
 ```
 
-`--url` 支持 `run` 和 `scan`；覆盖为网址模式后，即使用 `run` 也不执行构建。
+`--url` 支持 `run` 和 `scan`；覆盖为网址模式后，即使用 `run` 也不执行构建。有配置时，保留 `pages`、`beforePage`、源码映射、AI 和输出目录等项目设置，`--url`、`--runs` 及显式页面参数优先；配置读取或校验失败仍会报错。
+
+无配置或配置未写 `pages` 时，显式页面参数按网址的 origin 解析，例如 `scan / /about --url https://example.com/app/` 只扫描网站根路径与 `/about`，跳过自动发现。有显式配置页面时保持原有基础地址语义，页面会拼接在 `--url` 的部署前缀后。后续 `preview`、`analyze` 等读取项目设置的命令仍使用配置文件。
 
 只有网站地址、没有匹配的本地源码和映射时，可以获得扫描指标和规则建议，但源码级 AI 分析可能没有可用任务。扫描远程部署时，使用与该部署一致的源码和构建映射。
 
@@ -197,6 +209,8 @@ npx lhkit run --config ./apps/web --name web-review
 
 `--config` 接收**配置所在目录**，支持相对目录或绝对目录。默认在该目录依次查找 `lhkit.config.mjs`、`lhkit.config.js`。构建和服务命令在该项目目录执行，`serve.static`、`sourceMap`、`ai.sourceRoot`、`outDir` 等相对路径也以该目录为基准。
 
+无配置的 `scan --url` 同样支持 `--config ./apps/web`：该目录需已存在，扫描结果默认写入该目录的 `.lhkit/`。
+
 不要传 `--config ./apps/web/lhkit.config.mjs`。
 
 ### 4.5 只扫描指定页面
@@ -208,6 +222,25 @@ npx lhkit scan /products /about --name selected-pages
 ```
 
 命令行页面替换本次扫描使用的 `pages`，不修改配置文件。显式指定页面的轮次会标为“部分页面”，不会自动清理，也不作为完整轮次的历史基线。页面参数使用以 `/` 开头的路径。
+
+### 4.6 自动发现页面
+
+无配置的 `scan --url` 默认启用自动发现。已有配置时，删除 `pages` 字段也可启用；保留 `pages: ['/']` 则只扫首页。命令行页面列表与显式配置列表都会跳过自动发现。
+
+```bash
+npx lighthouse-kit scan --url https://example.com --max-pages 100 --max-depth 5
+```
+
+```js
+export default {
+  serve: { url: 'https://example.com' },
+  crawl: { maxPages: 50, maxDepth: 3, timeoutMs: 15000 },
+}
+```
+
+发现器读取 sitemap 及索引，再用浏览器遍历渲染后的站内链接；支持普通路径、查询参数和 `#/…`、`#!/…` 路由。入口重定向后以最终 origin 为范围，后续发现过滤站外地址、资源、下载与退出登录链接。`beforePage` 在发现阶段同样执行，可用于准备登录态。
+
+达到页数或深度上限、遇到不可读取页面或报告目录冲突时，终端会给出说明，轮次标记为部分扫描，并保留旧的完整结果。`round.json` 中的 `discovery` 记录限制、已访问页数与跳过原因。未暴露为链接、未进入 sitemap，或必须点击按钮/提交表单才能进入的路由需要手动指定，自动发现无法保证穷尽这些页面。
 
 ## 5 使用模型 API 分析
 
@@ -328,7 +361,7 @@ cp -R node_modules/lighthouse-kit/skills/lighthouse-kit .claude/skills/
 npx skills add wkylin/lighthouse-kit --skill lighthouse-kit
 ```
 
-该安装器要求 Node ≥22.20。默认安装到当前项目，添加 `-g` 则安装到用户目录；需要固定版本时可使用已推送的 Git tag，例如 `wkylin/lighthouse-kit@v0.2.1`。[安装器说明](https://github.com/vercel-labs/skills)
+该安装器要求 Node ≥22.20。默认安装到当前项目，添加 `-g` 则安装到用户目录；需要固定版本时可使用已推送的 Git tag，例如 `wkylin/lighthouse-kit@v0.3.0`。[安装器说明](https://github.com/vercel-labs/skills)
 
 ### 6.2 保持 API 模式关闭
 
@@ -521,7 +554,7 @@ npx lhkit compare before-001 after-001
 
 | 现象 | 操作 |
 |---|---|
-| pnpm 报 `ERR_PNPM_ADDING_TO_ROOT` | 确认应用是否位于 workspace 根目录；安装到根目录用 `pnpm add -Dw lighthouse-kit@0.2.1`，安装到子包则进入子包目录或指定 `--filter` |
+| pnpm 报 `ERR_PNPM_ADDING_TO_ROOT` | 确认应用是否位于 workspace 根目录；安装到根目录用 `pnpm add -Dw lighthouse-kit@0.3.0`，安装到子包则进入子包目录或指定 `--filter` |
 | npm 报 `EOVERRIDE` | 检查业务项目已有的直接依赖与 `overrides` 是否冲突；先按项目声明的包管理器安装。如确需使用 npm，直接依赖与对应 override 的版本声明必须完全一致，也可使用 `$依赖名` 引用直接依赖的声明 |
 | 找不到配置 | 在业务项目根目录运行，或用 `--config` 指向配置所在目录 |
 | 配置已存在，`init` 报错 | 编辑已有配置；确认要覆盖时才用 `init --force` |
@@ -571,7 +604,7 @@ LHKIT_NO_OPEN=1 npx lhkit run --name background-review
 
 | 参数 | 支持的命令 |
 |---|---|
-| `--runs N`、`--name X`、`--url U` | `run`、`scan` |
+| `--runs N`、`--name X`、`--url U`、`--max-pages N`、`--max-depth N` | `run`、`scan` |
 | `--ai-dry-run` | `run`、`scan`、`analyze` |
 | `--force` | `init` |
 

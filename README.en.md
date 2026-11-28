@@ -5,7 +5,7 @@
 | [Installation](#installation) | [Configuration](#configuration) | [Options](#options) | [Rules](#rules) |
 | :---: | :---: | :---: | :---: |
 
-Configure your project once, then **build → start a server → scan pages with Lighthouse → analyze findings with rules and optional AI → generate reports**. Works with React, Vue, and other frontend projects that can be built or reached at a URL.
+Scan a URL directly, or configure your project to **build → start a server → scan pages with Lighthouse → analyze findings with rules and optional AI → generate reports**. Works with React, Vue, and other frontend projects that can be built or reached at a URL.
 
 - Scan performance, accessibility, best practices, SEO, and Agentic Browsing. Get an HTML overview, original Lighthouse reports, and developer and lead reports in Markdown / HTML.
 - Use a manifest and source maps to link resources to source files, merge findings across pages, and prioritize work.
@@ -19,7 +19,18 @@ Requires **Node.js ≥ 22.19, macOS or Linux, and Chrome / Chromium**. The brows
 
 ### CLI: run your first scan
 
-Install in the application project using its existing package manager:
+For a reachable website, scan directly without initializing a configuration or adding a project dependency:
+
+```bash
+npx lighthouse-kit scan --url https://example.com
+npx lighthouse-kit scan --url https://example.com --max-pages 100 --max-depth 5
+# Scan only the specified page
+npx lighthouse-kit scan '/about?lang=en#intro' --url https://example.com --runs 3
+```
+
+Without an explicit page list, the CLI discovers pages from the complete entry URL, sitemaps, and rendered internal links, up to 50 pages and link depth 3 by default. Each page gets one mobile scan and rule analysis. Reports go into `.lhkit/` in the current directory; the CLI prints the HTML overview and document paths and creates no configuration file. Use `--runs 3` to take the median of repeated scans per page. `run --url` also works and opens the overview afterward.
+
+For project builds, multiple configured pages, login hooks, source maps, or AI settings, install and configure in the application project using its existing package manager:
 
 ```bash
 npm install -D lighthouse-kit
@@ -79,6 +90,28 @@ git push --follow-tags
 ## Configuration
 
 The CLI checks only the current directory for `lhkit.config.mjs`, then `lhkit.config.js`. Choose a server mode first, then add source mapping and AI as needed.
+
+`run` and `scan` accept both configuration files and `--url`. If a configuration exists, project settings are loaded and CLI values for the URL, runs, and page selection take precedence. If no configuration exists, `--url` enables scanning with defaults. Errors in an existing configuration are still reported.
+
+Without a configuration or when configured `pages` is omitted, the complete URL is the discovery entry. Explicit page arguments, such as `scan / /about --url https://example.com`, scan only those paths from its origin. With explicit configured `pages`, `--url` remains the base address for those pages, including deployment prefixes such as `/app/`.
+
+### Automatic page discovery
+
+Omitting `pages` enables discovery. CLI page arguments take precedence over configured pages; either explicit list skips discovery. To scan only the homepage, use `scan / --url https://example.com` or configure `pages: ['/']`.
+
+```js
+export default {
+  serve: { url: 'https://example.com' },
+  // Omit pages to discover automatically
+  crawl: { maxPages: 50, maxDepth: 3, timeoutMs: 15000 },
+}
+```
+
+Discovery combines sitemaps and sitemap indexes with rendered links. It preserves `#/…` and `#!/…` routes and meaningful queries, deduplicates ordinary anchors and trailing-slash aliases, and filters static assets, downloads, and logout links. The final entry origin after redirects defines the site scope; subsequent discovery stays on that origin. `beforePage` also runs during discovery.
+
+Override limits with `--max-pages` and `--max-depth`. Hitting a limit or encountering discovery errors prints a warning and marks the round partial, preserving earlier complete results. Private routes without sitemap entries or links, and pages accessible only through buttons or forms, require an explicit page list.
+
+Link depth limits link traversal; sitemap pages act as direct entries and still count toward the page limit. Each discovery reads at most 10 sitemap documents, 2 MiB per document, and 2000 links per page. Reaching these bounds also records the specific reason.
 
 ### Build and scan a local project
 
@@ -203,7 +236,8 @@ Replace `npx lhkit` with `pnpm exec lhkit` or `yarn lhkit` as appropriate.
 | `--config DIR` | All commands | Project directory containing the configuration |
 | `--runs N` | `run`, `scan` | Scans per page, selecting the median; positive integer |
 | `--name NAME` | `run`, `scan` | Name a round to preserve it from automatic cleanup; choose an unused name |
-| `--url URL` | `run`, `scan` | Temporarily use URL mode; skips building even with `run` |
+| `--url URL` | `run`, `scan` | Override the target; use defaults without a configuration; skip building and server startup |
+| `--max-pages N` / `--max-depth N` | `run`, `scan` | Discovery page limit / link depth, default `50` / `3` |
 | `--ai-dry-run` | `run`, `scan`, `analyze` | Preview enabled API analysis tasks without requests or AI cache writes |
 | `--force` | `init` | Overwrite existing configuration |
 | `--help` / `--version` | Top-level invocation | `npx lhkit --help` / `npx lhkit --version` |
@@ -215,7 +249,8 @@ Page arguments must start with `/`. They replace the configured page selection a
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `build.command` / `build.env` | No build / `{}` | Build command and extra environment variables; ignored in URL mode |
-| `pages` | Required | Nonempty page path array; paths that share an output directory are rejected |
+| `pages` | Automatic discovery | An explicit nonempty list scans only those pages; output-directory collisions are rejected |
+| `crawl.maxPages` / `crawl.maxDepth` / `crawl.timeoutMs` | `50` / `3` / `15000` | Discovery page limit, link depth, and per-navigation or sitemap timeout in milliseconds |
 | `serve.port` / `serve.proxy` | `4173` / `{}` | Static server port and API prefix proxy, including WebSocket support |
 | `serve.readyPath` / `serve.timeoutMs` | `'/'` / `60000` | Server readiness path and timeout in milliseconds |
 | `runs` / `visit` | `1` / `'first'` | Repeat scans and select the median; `'repeat'` warms the page first |

@@ -104,9 +104,18 @@ export interface UserConfig {
   serve: ServeConfig
   /** 在服务前面加一层 HTTP/2 + 自签证书的代理，贴近线上（网址模式下忽略）。 */
   https?: { enabled?: boolean; port?: number }
-  /** 要扫描的页面路径，以 `/` 开头，例如 `['/', '/about']`。 */
-  pages: string[]
-  /** 打开每个页面前执行，例如写入登录态、sessionStorage。 */
+  /** 要扫描的页面路径；省略时自动发现。显式列表以 `/` 开头，例如 `['/', '/about']`。 */
+  pages?: string[]
+  /** 自动发现的范围限制；显式指定 pages 或命令行页面时不启用发现。 */
+  crawl?: {
+    /** 最多扫描页面数，正整数，默认 50。 */
+    maxPages?: number
+    /** 站内链接最大深度，非负整数，默认 3；sitemap 页面作为入口。 */
+    maxDepth?: number
+    /** 每页导航及 sitemap 请求超时，毫秒，默认 15000。 */
+    timeoutMs?: number
+  }
+  /** 打开每个页面前执行，包括自动发现阶段，例如写入登录态、sessionStorage。 */
   beforePage?: (ctx: BeforePageContext) => void | Promise<void>
   /** 每页扫描次数，取中位数，默认 1。 */
   runs?: number

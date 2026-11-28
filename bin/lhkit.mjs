@@ -29,6 +29,18 @@ export const HELP = `lhkit ${pkg.version} — 本地 Lighthouse 扫描、报告�
   -h, --help                             显示帮助
   -v, --version                          显示版本
 
+直接扫描（无需配置文件）：
+  lhkit scan --url https://example.com
+  lhkit scan --url https://example.com --max-pages 100 --max-depth 5
+  lhkit scan /about --url https://example.com --runs 3
+  有配置时沿用项目设置，--url / --runs / 页面参数优先；URL 模式跳过构建和起服务。
+
+自动发现（未指定命令行页面或配置 pages 时）：
+  从入口、sitemap 和渲染后的站内链接发现同源页面，逐页扫描。
+  --max-pages N                         最多发现页面数（默认 50）
+  --max-depth N                         站内链接最大深度（默认 3，可为 0）
+  显式指定页面（例如 scan / --url ...）只扫描该列表。
+
 退出码：0 成功；1 运行失败；2 配置错误；3 端口占用或服务未就绪；4 部分页面失败
 `
 
